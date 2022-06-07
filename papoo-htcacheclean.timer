@@ -1,0 +1,12 @@
+[Unit]
+Description=Clean Apache Disk Cache every 10 minutes
+Conflicts=apache-htcacheclean.service
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
