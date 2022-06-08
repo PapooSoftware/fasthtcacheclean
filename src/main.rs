@@ -16,6 +16,9 @@ use thiserror::Error;
 
 mod apache_cache_header;
 
+#[cfg(test)]
+mod tests;
+
 const CACHE_HEADER_SUFFIX: &str = ".header";
 const CACHE_DATA_SUFFIX: &str = ".data";
 const CACHE_VDIR_SUFFIX: &str = ".vary";
@@ -23,7 +26,7 @@ const CACHE_HEADER_VDIR_EXTENSION: &str = "header.vary";
 const AP_TEMPFILE_BASE: &str = "aptmp";
 const AP_TEMPFILE_SUFFIX: &str = "XXXXXX";
 
-/// Command line arguments
+/// Program for cleaning the Apache disk cache.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -86,15 +89,15 @@ impl SizeSpec {
 /// Statistic results
 #[derive(Debug, Clone, Copy)]
 struct Stats {
-	deleted: u64,
-	deleted_folders: u64,
-	failed: u64,
+	pub deleted: u64,
+	pub deleted_folders: u64,
+	pub failed: u64,
 }
 
 impl Stats {
 	/// Count the given result into the statistics
 	#[inline]
-	fn count<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
+	pub fn count<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
 		match r {
 			Ok(true) => self.deleted += 1,
 			Ok(false) => {}
@@ -106,7 +109,7 @@ impl Stats {
 
 	/// Count the given result for folder deletion into the statistics
 	#[inline]
-	fn count_folder<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
+	pub fn count_folder<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
 		match r {
 			Ok(true) => self.deleted_folders += 1,
 			Ok(false) => {}
@@ -118,7 +121,7 @@ impl Stats {
 
 	/// Merge the counts of the given stats-returning result into the statistics
 	#[inline]
-	fn merge_result<E: fmt::Debug>(&mut self, r: Result<Stats, E>) {
+	pub fn merge_result<E: fmt::Debug>(&mut self, r: Result<Stats, E>) {
 		match r {
 			Ok(stats) => {
 				self.deleted += stats.deleted;
@@ -131,7 +134,7 @@ impl Stats {
 
 	/// Merge the counts of the given stats into the statistics
 	#[inline]
-	fn merge(&mut self, stats: Stats) {
+	pub fn merge(&mut self, stats: Stats) {
 		self.deleted += stats.deleted;
 		self.deleted_folders += stats.deleted_folders;
 		self.failed += stats.failed;
@@ -139,6 +142,7 @@ impl Stats {
 }
 
 impl Default for Stats {
+	#[inline]
 	fn default() -> Self {
 		Self {
 			deleted: 0,
