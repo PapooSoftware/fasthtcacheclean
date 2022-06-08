@@ -87,6 +87,7 @@ impl SizeSpec {
 #[derive(Debug, Clone, Copy)]
 struct Stats {
 	deleted: u64,
+	deleted_folders: u64,
 	failed: u64,
 }
 
@@ -103,12 +104,25 @@ impl Stats {
 		}
 	}
 
+	/// Count the given result for folder deletion into the statistics
+	#[inline]
+	fn count_folder<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
+		match r {
+			Ok(true) => self.deleted_folders += 1,
+			Ok(false) => {}
+			Err(_) => {
+				self.failed += 1;
+			}
+		}
+	}
+
 	/// Merge the counts of the given stats-returning result into the statistics
 	#[inline]
 	fn merge_result<E: fmt::Debug>(&mut self, r: Result<Stats, E>) {
 		match r {
 			Ok(stats) => {
 				self.deleted += stats.deleted;
+				self.deleted_folders += stats.deleted_folders;
 				self.failed += stats.failed;
 			}
 			Err(_) => self.failed += 1,
@@ -119,6 +133,7 @@ impl Stats {
 	#[inline]
 	fn merge(&mut self, stats: Stats) {
 		self.deleted += stats.deleted;
+		self.deleted_folders += stats.deleted_folders;
 		self.failed += stats.failed;
 	}
 }
@@ -127,6 +142,7 @@ impl Default for Stats {
 	fn default() -> Self {
 		Self {
 			deleted: 0,
+			deleted_folders: 0,
 			failed: 0,
 		}
 	}
@@ -309,7 +325,8 @@ fn delete_folder_if_not_recent(
 	}
 
 	// Try to remove it
-	let result = remove_dir(entry.path());
+	let path = entry.path();
+	let result = remove_dir(&path);
 	match result {
 		Ok(()) => Ok(true),
 		Err(e) if matches!(e.raw_os_error(), Some(libc::ENOTEMPTY)) => Ok(false),
@@ -442,13 +459,13 @@ fn process_folder(
 				// Recurse into vary directories
 				else if name.ends_with(CACHE_VDIR_SUFFIX) {
 					let _ = process_folder(&item.path(), now, true, condition);
-					stats.count(delete_folder_if_not_recent(&item, None, now, 1800));
+					stats.count_folder(delete_folder_if_not_recent(&item, None, now, 1800));
 				}
 				// Recurse into other directories
 				else if let Ok(metadata) = item.metadata() {
 					if metadata.is_dir() {
 						stats.merge_result(process_folder(&item.path(), now, in_vary, condition));
-						stats.count(delete_folder_if_not_recent(
+						stats.count_folder(delete_folder_if_not_recent(
 							&item,
 							Some(metadata),
 							now,
@@ -511,10 +528,11 @@ fn main() {
 	if usage >= 99.5 {
 		// Run through these conditions until there is enough free space
 		for condition in [
-			Condition::Expired(Duration::new(3600, 0)),
-			Condition::Expired(Duration::new(1800, 0)),
 			Condition::Expired(Duration::new(600, 0)),
-			Condition::Expired(Duration::new(60, 0)),
+			Condition::Expired(Duration::new(120, 0)),
+			Condition::Expired(Duration::new(30, 0)),
+			Condition::Accessed(Duration::new(10800, 0)),
+			Condition::Accessed(Duration::new(3600, 0)),
 			Condition::Accessed(Duration::new(1800, 0)),
 			Condition::Accessed(Duration::new(600, 0)),
 			Condition::Accessed(Duration::new(120, 0)),
@@ -532,26 +550,52 @@ fn main() {
 				break;
 			}
 		}
-	} else if usage > 95.0 {
-		let condition = Condition::Expired(Duration::new(10800, 0));
+	}
+	else if usage > 98.5 {
+		let condition = Condition::Expired(Duration::new(1200, 0));
+		println!("Deleting cache contents with {}...", condition);
+		let result = process_folder_parallel(".".as_ref(), &now, condition);
+		if let Ok(stats) = result {
+			println!("{:?}", stats);
+		}
+	}
+	else if usage > 97.0 {
+		let condition = Condition::Expired(Duration::new(1800, 0));
+		println!("Deleting cache contents with {}...", condition);
+		let result = process_folder_parallel(".".as_ref(), &now, condition);
+		if let Ok(stats) = result {
+			println!("{:?}", stats);
+		}
+	}
+	else if usage > 95.0 {
+		let condition = Condition::Expired(Duration::new(3600, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
 	} else if usage > 90.0 {
+		let condition = Condition::Expired(Duration::new(10800, 0));
+		println!("Deleting cache contents with {}...", condition);
+		let result = process_folder_parallel(".".as_ref(), &now, condition);
+		if let Ok(stats) = result {
+			println!("{:?}", stats);
+		}
+	} else if usage > 80.0 {
 		let condition = Condition::Expired(Duration::new(21600, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
-	} else {
+	} else if usage > 60.0 {
 		let condition = Condition::Expired(Duration::new(86400, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
+	} else {
+		// do nothing
 	}
 }

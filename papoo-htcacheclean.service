@@ -8,5 +8,5 @@ Nice=6
 User=www-data
 Environment=HTCACHECLEAN_PATH=/var/cache/apache2/mod_cache_disk
 EnvironmentFile=-/etc/default/apache-htcacheclean
-ExecStart=/usr/local/bin/papoo-htcacheclean -p $HTCACHECLEAN_PATH -f 25% -F 5%
+ExecStart=/usr/local/bin/papoo-htcacheclean -p $HTCACHECLEAN_PATH -f 20% -F 5%
 

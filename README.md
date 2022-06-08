@@ -39,17 +39,21 @@ arbeitet dieses Script direkter und schneller in mehreren Runden, löscht dafür
 - Es wird bestimmt, wie viel Speicher und wie viele Inodes noch auf der Partition frei sind.
 - Der freie Speicherplatz wird mit dem festgelegten Limit verglichen
   - Wenn nicht mehr genug Speicher verfügbar ist (99,5 % des Limits oder mehr erreicht), wird die folgende Liste abgearbeitet, bis weniger als 100% verbraucht werden.
-    1. Expiry länger als eine Stunde her
-    2. Expiry länger 30 Minuten her
-    3. Expiry länger 10 Minuten her
-    4. Expiry länger als 1 Minute her
-    5. Letzter Zugriff länger als 30 Minuten her
+    1. Expiry länger 10 Minuten her
+    2. Expiry länger als 2 Minute her
+    3. Expiry länger als 30 Sekunden her
+    4. Letzter Zugriff länger als 3 Stunden her
+    4. Letzter Zugriff länger als 1 Stunde her
+    4. Letzter Zugriff länger als 30 Minuten her
     6. Letzter Zugriff länger als 10 Minuten her
     7. Letzter Zugriff länger als 2 Minuten her
     8. Bearbeitung länger als 10 Minuten her
     9. Bearbeitung länger als 2 Minuten her
-  - Wenn 95 % erreicht sind, wird nur alles mit Expiry > 3 Stunden gelöscht
-  - Wenn 90 % erreicht sind, wird nur alles mit Expiry > 6 Stunden gelöscht
-  - Ansonsten wird nur alles mit Expiry > 24 Stunden gelöscht
+  - Wenn 98,5 % erreicht sind, wir nur alles mit Expiry > 20 Minuten gelöscht
+  - Wenn 97 % erreicht sind, wir nur alles mit Expiry > 30 Minuten gelöscht
+  - Wenn 95 % erreicht sind, wird nur alles mit Expiry > 1 Stunde gelöscht
+  - Wenn 90 % erreicht sind, wird nur alles mit Expiry > 3 Stunden gelöscht
+  - Wenn 80 % erreicht sind, wird nur alles mit Expiry > 6 Stunden gelöscht
+  - Wenn 60 % erreicht sind, wird nur alles mit Expiry > 24 Stunden gelöscht
 
 Die Grenzen werden noch anhand der empirischen Ergebnisse auf dem 5f-Server angepasst.
