@@ -3,10 +3,11 @@ use nix::sys::statfs::statfs;
 use rayon::prelude::*;
 use std::cmp::max;
 use std::collections::HashSet;
-use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
+use std::fs::{remove_dir, remove_file, DirEntry, Metadata, OpenOptions};
 use std::num::ParseFloatError;
 use std::num::ParseIntError;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::thread;
@@ -189,7 +190,11 @@ impl Condition {
 	) -> Result<bool, Box<dyn std::error::Error>> {
 		match self {
 			Condition::Expired(duration) => {
-				let mut file = std::fs::File::open(&path)?;
+				let mut options = OpenOptions::new();
+				options.read(true);
+				options.custom_flags(libc::O_NOATIME | libc::O_NOCTTY | libc::O_CLOEXEC);
+
+				let mut file = options.open(&path)?;
 				let expiry = apache_cache_header::read_expiration_time(&mut file)?;
 				Ok(*now - *duration > expiry)
 			}
@@ -495,13 +500,16 @@ fn process_folder(
 fn calculate_usage(minspace: SizeSpec, mininodes: SizeSpec) -> f64 {
 	let fsstat = statfs(".").expect("Couldn't get free space information");
 	let block_size: u64 = fsstat.block_size().try_into().unwrap_or(4096);
-	let free_space_target = minspace.value(block_size * fsstat.blocks());
-	let free_space = fsstat.blocks_free() * block_size;
-	let free_inodes_target = mininodes.value(fsstat.files());
-	let free_inodes = fsstat.files_free();
+	let total_space = block_size * fsstat.blocks();
+	let used_space_target = total_space.saturating_sub(minspace.value(total_space));
+	let used_space = fsstat.blocks().saturating_sub(fsstat.blocks_available()) * block_size;
 
-	let inode_usage = free_inodes_target as f64 * 100.0 / (free_inodes + 1) as f64;
-	let space_usage = free_space_target as f64 * 100.0 / (free_space + 1) as f64;
+	let total_inodes = fsstat.files();
+	let used_inodes_target = total_inodes.saturating_sub(mininodes.value(total_inodes));
+	let used_inodes = total_inodes.saturating_sub(fsstat.files_free());
+
+	let inode_usage = used_inodes as f64 * 100.0 / (used_inodes_target + 1) as f64;
+	let space_usage = used_space as f64 * 100.0 / (used_space_target + 1) as f64;
 	if inode_usage > space_usage {
 		inode_usage
 	} else {
