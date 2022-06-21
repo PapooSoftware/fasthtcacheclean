@@ -32,7 +32,7 @@ const AP_TEMPFILE_SUFFIX: &str = "XXXXXX";
 #[clap(author, version, about, long_about = None)]
 struct Args {
 	/// Root directory of the disk cache.
-	#[clap(short, long)]
+	#[clap(short, long, parse(from_os_str))]
 	path: PathBuf,
 	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
 	/// specify Kilobytes, Megabytes, Gigabytes, Terabytes or a percentage
@@ -43,7 +43,7 @@ struct Args {
 	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
 	/// specify Kilobytes, Megabytes, Gigabytes, Terabytes or a percentage
 	/// of the total disk inodes.
-	#[clap(short='F', long, value_name="COUNT|PERCENT", default_value_t=SizeSpec::Percentage(1.0))]
+	#[clap(short='F', long, value_name="COUNT|PERCENT", default_value_t=SizeSpec::Percentage(5.0))]
 	min_free_inodes: SizeSpec,
 }
 
@@ -88,7 +88,7 @@ impl SizeSpec {
 }
 
 /// Statistic results
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Stats {
 	pub deleted: u64,
 	pub deleted_folders: u64,
@@ -139,17 +139,6 @@ impl Stats {
 		self.deleted += stats.deleted;
 		self.deleted_folders += stats.deleted_folders;
 		self.failed += stats.failed;
-	}
-}
-
-impl Default for Stats {
-	#[inline]
-	fn default() -> Self {
-		Self {
-			deleted: 0,
-			deleted_folders: 0,
-			failed: 0,
-		}
 	}
 }
 
@@ -399,15 +388,13 @@ fn process_folder_parallel(
 	let mut stats = Stats::default();
 
 	// First clean old temporary files
-	for item in path.read_dir()? {
-		if let Ok(item) = item {
-			if let Some(name) = item.file_name().to_str() {
-				// Temporary files -> only delete if old
-				if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
-					&& name.starts_with(AP_TEMPFILE_BASE)
-				{
-					stats.count(delete_file_if_not_recent(&item, now, 600));
-				}
+	for item in path.read_dir()?.flatten() {
+		if let Some(name) = item.file_name().to_str() {
+			// Temporary files -> only delete if old
+			if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
+				&& name.starts_with(AP_TEMPFILE_BASE)
+			{
+				stats.count(delete_file_if_not_recent(&item, now, 600));
 			}
 		}
 	}
@@ -433,54 +420,51 @@ fn process_folder(
 	let mut known_headers = HashSet::new();
 	let mut stats = Stats::default();
 
-	for item in path.read_dir()? {
-		if let Ok(item) = item {
-			let name = item.file_name();
-			if let Some(name) = name.to_str() {
-				// Temporary files -> only delete if old
-				if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
-					&& name.starts_with(AP_TEMPFILE_BASE)
-				{
-					stats.count(delete_file_if_not_recent(&item, now, 600));
-				}
-				// Header files
-				else if name.ends_with(CACHE_HEADER_SUFFIX) {
-					known_headers.insert(name[..name.len() - CACHE_HEADER_SUFFIX.len()].to_owned());
-					stats.count(process_header_file(&item, now, in_vary, condition));
-				}
-				// Data files
-				else if name.ends_with(CACHE_DATA_SUFFIX) {
-					let base = &name[..name.len() - CACHE_DATA_SUFFIX.len()];
-					if !known_headers.contains(base) {
-						let mut header_path = item.path();
-						header_path.set_extension(&CACHE_HEADER_SUFFIX[1..]);
-						// If the header file is missing and the file is old, delete it.
-						if !header_path.exists() {
-							stats.count(delete_file_if_not_recent(&item, now, 120));
-							continue;
-						}
-					}
-					if !in_vary {
-						// Delete old data file if there is a newer Vary directory
-						stats.count(delete_data_if_newer_vary(&item, now));
+	for item in path.read_dir()?.flatten() {
+		let name = item.file_name();
+		if let Some(name) = name.to_str() {
+			// Temporary files -> only delete if old
+			if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
+				&& name.starts_with(AP_TEMPFILE_BASE)
+			{
+				stats.count(delete_file_if_not_recent(&item, now, 600));
+			}
+			// Header files
+			else if let Some(stem) = name.strip_suffix(CACHE_HEADER_SUFFIX) {
+				known_headers.insert(stem.to_owned());
+				stats.count(process_header_file(&item, now, in_vary, condition));
+			}
+			// Data files
+			else if let Some(stem) = name.strip_suffix(CACHE_DATA_SUFFIX) {
+				if !known_headers.contains(stem) {
+					let mut header_path = item.path();
+					header_path.set_extension(&CACHE_HEADER_SUFFIX[1..]);
+					// If the header file is missing and the file is old, delete it.
+					if !header_path.exists() {
+						stats.count(delete_file_if_not_recent(&item, now, 120));
+						continue;
 					}
 				}
-				// Recurse into vary directories
-				else if name.ends_with(CACHE_VDIR_SUFFIX) {
-					let _ = process_folder(&item.path(), now, true, condition);
-					stats.count_folder(delete_folder_if_not_recent(&item, None, now, 1800));
+				if !in_vary {
+					// Delete old data file if there is a newer Vary directory
+					stats.count(delete_data_if_newer_vary(&item, now));
 				}
-				// Recurse into other directories
-				else if let Ok(metadata) = item.metadata() {
-					if metadata.is_dir() {
-						stats.merge_result(process_folder(&item.path(), now, in_vary, condition));
-						stats.count_folder(delete_folder_if_not_recent(
-							&item,
-							Some(metadata),
-							now,
-							1800,
-						));
-					}
+			}
+			// Recurse into vary directories
+			else if name.ends_with(CACHE_VDIR_SUFFIX) {
+				let _ = process_folder(&item.path(), now, true, condition);
+				stats.count_folder(delete_folder_if_not_recent(&item, None, now, 1800));
+			}
+			// Recurse into other directories
+			else if let Ok(metadata) = item.metadata() {
+				if metadata.is_dir() {
+					stats.merge_result(process_folder(&item.path(), now, in_vary, condition));
+					stats.count_folder(delete_folder_if_not_recent(
+						&item,
+						Some(metadata),
+						now,
+						1800,
+					));
 				}
 			}
 		}
@@ -562,24 +546,21 @@ fn main() {
 				break;
 			}
 		}
-	}
-	else if usage > 98.5 {
+	} else if usage > 98.5 {
 		let condition = Condition::Expired(Duration::new(1200, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
-	}
-	else if usage > 97.0 {
+	} else if usage > 97.0 {
 		let condition = Condition::Expired(Duration::new(1800, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
-	}
-	else if usage > 95.0 {
+	} else if usage > 95.0 {
 		let condition = Condition::Expired(Duration::new(3600, 0));
 		println!("Deleting cache contents with {}...", condition);
 		let result = process_folder_parallel(".".as_ref(), &now, condition);

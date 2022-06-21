@@ -1,11 +1,12 @@
+use crate::{Condition, ParseSizeSpecError, SizeSpec, Stats};
 use std::time::Duration;
-use crate::{Stats, SizeSpec, ParseSizeSpecError, Condition};
 
 /// Tests string -> `SizeSpec` -> string conversion
 #[test]
-fn test_sizespec_roundtrip()
-{
-	for string in ["0", "100", "50K", "1M", "42G", "1T", "0%", "1%", "99.5%", "101%"] {
+fn test_sizespec_roundtrip() {
+	for string in [
+		"0", "100", "50K", "1M", "42G", "1T", "0%", "1%", "99.5%", "101%",
+	] {
 		let value: SizeSpec = string.parse().unwrap();
 		assert_eq!(string, value.to_string());
 	}
@@ -15,32 +16,39 @@ fn test_sizespec_roundtrip()
 
 /// Tests `SizeSpec` parse failure on negative values
 #[test]
-fn test_sizespec_negative_error()
-{
-	for string in ["-0", "-1", "-50K", "-1M", "-42G", "-1T", "-0%", "-1%", "-99.5%", "-101%"] {
+fn test_sizespec_negative_error() {
+	for string in [
+		"-0", "-1", "-50K", "-1M", "-42G", "-1T", "-0%", "-1%", "-99.5%", "-101%",
+	] {
 		assert!(string.parse::<SizeSpec>().is_err());
 	}
 }
 
 /// Tests `SizeSpec` parse failure on empty string
 #[test]
-fn test_sizespec_empty_error()
-{
-	assert!(matches!("".parse::<SizeSpec>().unwrap_err(), ParseSizeSpecError::EmptyString));
+fn test_sizespec_empty_error() {
+	assert!(matches!(
+		"".parse::<SizeSpec>().unwrap_err(),
+		ParseSizeSpecError::EmptyString
+	));
 }
 
 /// Tests `SizeSpec` parse failure on invalid unit suffixes
 #[test]
-fn test_sizespec_unit_error()
-{
-	assert!(matches!("1x".parse::<SizeSpec>().unwrap_err(), ParseSizeSpecError::InvalidUnit('x')));
-	assert!(matches!("5.5!".parse::<SizeSpec>().unwrap_err(), ParseSizeSpecError::InvalidUnit('!')));
+fn test_sizespec_unit_error() {
+	assert!(matches!(
+		"1x".parse::<SizeSpec>().unwrap_err(),
+		ParseSizeSpecError::InvalidUnit('x')
+	));
+	assert!(matches!(
+		"5.5!".parse::<SizeSpec>().unwrap_err(),
+		ParseSizeSpecError::InvalidUnit('!')
+	));
 }
 
 // Tests `SizeSpec::value()` output
 #[test]
-fn test_sizespec_value()
-{
+fn test_sizespec_value() {
 	let a = SizeSpec::Absolute(1000);
 	assert_eq!(a.value(0), 1000);
 	assert_eq!(a.value(9999999), 1000);
@@ -55,8 +63,7 @@ fn test_sizespec_value()
 
 /// Tests `Stats` `Default` implementation
 #[test]
-fn test_stats_default()
-{
+fn test_stats_default() {
 	let result = <Stats as Default>::default();
 	assert_eq!(result.deleted, 0);
 	assert_eq!(result.deleted_folders, 0);
@@ -65,8 +72,7 @@ fn test_stats_default()
 
 /// Tests `Stats` counting
 #[test]
-fn test_stats_counting()
-{
+fn test_stats_counting() {
 	let mut result = <Stats as Default>::default();
 	result.count(Err(()));
 	result.count(Err(()));
@@ -84,8 +90,7 @@ fn test_stats_counting()
 
 /// Tests `Stats` summing
 #[test]
-fn test_stats_summing()
-{
+fn test_stats_summing() {
 	let items = [
 		Stats {
 			deleted: 50,
@@ -117,8 +122,7 @@ fn test_stats_summing()
 
 /// Tests `Stats` summing
 #[test]
-fn test_stats_result_summing()
-{
+fn test_stats_result_summing() {
 	let items: [Result<Stats, ()>; 5] = [
 		Ok(Stats {
 			deleted: 50,
@@ -148,4 +152,3 @@ fn test_stats_result_summing()
 	assert_eq!(result.deleted_folders, 5);
 	assert_eq!(result.failed, 43);
 }
-
