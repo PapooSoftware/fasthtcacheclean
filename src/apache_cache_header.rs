@@ -8,15 +8,11 @@ use thiserror::Error;
 const VARY_FORMAT_VERSION: u32 = 5;
 const DISK_FORMAT_VERSION: u32 = 6;
 
-#[derive(Error, Debug)]
-pub enum ApacheHeaderError {
-	#[error("unknown file format `{0}`")]
-	UnknownFormat(u32),
-	#[error("reading failed: {0:?}")]
-	ReadError(#[from] io::Error),
-}
+#[derive(Error, Debug, Clone, Copy)]
+#[error("unknown apache cache header format `{0}`")]
+pub struct FormatError(u32);
 
-pub fn read_expiration_time(mut f: impl io::Read) -> Result<SystemTime, ApacheHeaderError> {
+pub fn read_expiration_time(mut f: impl io::Read) -> Result<SystemTime, io::Error> {
 	let mut buffer = [0u8; 4];
 	f.read_exact(&mut buffer)?;
 	let format = u32::from_ne_bytes(buffer);
@@ -30,7 +26,10 @@ pub fn read_expiration_time(mut f: impl io::Read) -> Result<SystemTime, ApacheHe
 		f.read_exact(&mut buffer)?;
 		u64::from_ne_bytes(buffer)
 	} else {
-		return Err(ApacheHeaderError::UnknownFormat(format));
+		return Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			FormatError(format),
+		));
 	};
 
 	Ok(SystemTime::UNIX_EPOCH.add(Duration::from_micros(microseconds)))

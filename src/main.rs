@@ -1,21 +1,30 @@
 use clap::Parser;
 use nix::sys::statfs::statfs;
-use rayon::prelude::*;
 use std::cmp::max;
 use std::collections::HashSet;
-use std::fs::{remove_dir, remove_file, DirEntry, Metadata, OpenOptions};
+use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
 use std::num::ParseFloatError;
 use std::num::ParseIntError;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use std::{fmt, io};
+use std::mem::drop;
 use thiserror::Error;
+use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::Mutex;
+use crossbeam::thread;
+use std::thread::yield_now;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 
 mod apache_cache_header;
+mod cache_file_info;
+mod cache_priority_queue;
+
+use cache_priority_queue::CachePriorityQueue;
+use cache_file_info::CacheFileInfo;
 
 #[cfg(test)]
 mod tests;
@@ -28,7 +37,7 @@ const AP_TEMPFILE_BASE: &str = "aptmp";
 const AP_TEMPFILE_SUFFIX: &str = "XXXXXX";
 
 /// Program for cleaning the Apache disk cache.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
 	/// Root directory of the disk cache.
@@ -45,6 +54,12 @@ struct Args {
 	/// of the total disk inodes.
 	#[clap(short='F', long, value_name="COUNT|PERCENT", default_value_t=SizeSpec::Percentage(5.0))]
 	min_free_inodes: SizeSpec,
+
+	/// Jobs to run simultaneously. (0 for automatic selection based on available CPUs)
+	///
+	/// Use `-j1` for slow storage devices where parallel accesses slow down too much.
+	#[clap(short, long, default_value_t=0)]
+	jobs: usize,
 }
 
 /// Representation for a user-specified size limit (percentage or absolute)
@@ -96,6 +111,12 @@ struct Stats {
 }
 
 impl Stats {
+	/// Increment the failed counter
+	#[inline]
+	pub fn add_failed(&mut self) {
+		self.failed += 1;
+	}
+
 	/// Count the given result into the statistics
 	#[inline]
 	pub fn count<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
@@ -162,53 +183,6 @@ impl<E: fmt::Debug> std::iter::Sum<Result<Self, E>> for Stats {
 	}
 }
 
-/// Deletion condition
-#[derive(Debug, Clone, Copy)]
-enum Condition {
-	Expired(Duration),
-	Accessed(Duration),
-	Modified(Duration),
-}
-
-impl Condition {
-	/// Returns `Ok(true)` if the condition matches the file
-	pub fn matches(
-		&self,
-		path: &Path,
-		now: &SystemTime,
-	) -> Result<bool, Box<dyn std::error::Error>> {
-		match self {
-			Condition::Expired(duration) => {
-				let mut options = OpenOptions::new();
-				options.read(true);
-				options.custom_flags(libc::O_NOATIME | libc::O_NOCTTY | libc::O_CLOEXEC);
-
-				let mut file = options.open(&path)?;
-				let expiry = apache_cache_header::read_expiration_time(&mut file)?;
-				Ok(*now - *duration > expiry)
-			}
-			Condition::Accessed(duration) => {
-				let metadata = path.metadata()?;
-				Ok(*now - *duration > metadata.accessed()?)
-			}
-			Condition::Modified(duration) => {
-				let metadata = path.metadata()?;
-				Ok(*now - *duration > metadata.modified()?)
-			}
-		}
-	}
-}
-
-impl fmt::Display for Condition {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Expired(d) => write!(f, "expired >= {:?}", d),
-			Self::Accessed(d) => write!(f, "accessed >= {:?}", d),
-			Self::Modified(d) => write!(f, "modified >= {:?}", d),
-		}
-	}
-}
-
 /// Error type for parsing a `SizeSpec`
 #[derive(Error, Debug)]
 pub enum ParseSizeSpecError {
@@ -264,7 +238,7 @@ fn delete_file_if_not_recent(
 	entry: &DirEntry,
 	now: &SystemTime,
 	seconds: u64,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, io::Error> {
 	let metadata = entry.metadata()?;
 	if !metadata.is_file() {
 		return Ok(false);
@@ -290,7 +264,7 @@ fn delete_folder_if_not_recent(
 	metadata: Option<Metadata>,
 	now: &SystemTime,
 	seconds: u64,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, io::Error> {
 	let metadata = match metadata {
 		Some(m) => m,
 		None => entry.metadata()?,
@@ -336,7 +310,7 @@ fn delete_folder_if_not_recent(
 fn delete_data_if_newer_vary(
 	entry: &DirEntry,
 	now: &SystemTime,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, io::Error> {
 	let mut vary_header_path = entry.path();
 	vary_header_path.set_extension(CACHE_HEADER_VDIR_EXTENSION);
 	if vary_header_path.exists() {
@@ -351,40 +325,89 @@ fn delete_data_if_newer_vary(
 
 /// Processes a header file
 fn process_header_file(
-	entry: &DirEntry,
-	now: &SystemTime,
-	in_vary: bool,
-	condition: Condition,
-) -> Result<bool, Box<dyn std::error::Error>> {
-	let path = entry.path();
-	if let Ok(true) = condition.matches(&path, now) {
-		if !in_vary {
-			let mut vdir_path = path.clone();
-			vdir_path.set_extension(CACHE_HEADER_VDIR_EXTENSION);
-			if vdir_path.exists() {
-				if let Ok(metadata) = vdir_path.metadata() {
-					if metadata.is_dir() {
-						// Don't delete main header as long as a vary directory exists
-						return Ok(false);
-					}
-				}
-			}
-		}
-		let mut data_path = path.clone();
-		data_path.set_extension(&CACHE_DATA_SUFFIX[1..]);
-		let _ = remove_file(data_path);
-		remove_file(path).map(|_| true).map_err(From::from)
-	} else {
-		Ok(false)
-	}
+	fileinfo: &CacheFileInfo,
+) -> Result<bool, io::Error> {
+	let data_path = fileinfo.data_path();
+	let _ = remove_file(data_path);
+	remove_file(fileinfo.header_path()).map(|_| true).map_err(From::from)
 }
 
 /// Processes the subfolders of a folder in parallel
 fn process_folder_parallel(
 	path: &Path,
+	args: &Args,
 	now: &SystemTime,
-	condition: Condition,
-) -> Result<Stats, Box<dyn std::error::Error>> {
+) -> Result<Stats, io::Error> {
+	let mut stats = Stats::default();
+
+	println!("Clean temp");
+	// First clean old temporary files
+	for item in path.read_dir()?.flatten() {
+		if let Some(name) = item.file_name().to_str() {
+			// Temporary files -> only delete if old
+			if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
+				&& name.starts_with(AP_TEMPFILE_BASE)
+			{
+				stats.count(delete_file_if_not_recent(&item, now, 600));
+			}
+		}
+	}
+
+	let mut folders = path.read_dir()?.collect::<Vec<_>>();
+	let chunk_size = (folders.len() / args.jobs) + 1;
+	let stats = Mutex::new(stats);
+	let mut queue = CachePriorityQueue::with_capacity(1000, 1000000);
+
+	let mut rng = thread_rng();
+	folders.shuffle(&mut rng);
+
+	println!("Scan directories");
+	// Run `process_folder` in parallel (in up to CPUs/2 threads)
+	thread::scope(|s| {
+		let (sender, receiver) = sync_channel(1000);
+
+		for chunk in folders.chunks(chunk_size) {
+			let sender = sender.clone();
+			let stats = &stats;
+			s.spawn(move |_| {
+				for folder in chunk.into_iter().flatten() {
+					let result = process_folder(&folder.path(), args, now, &sender);
+					stats.lock().unwrap().merge_result(result);
+				}
+			});
+		}
+		drop(sender);
+
+		while let Ok(fileinfo) = receiver.recv() {
+			queue.push(fileinfo);
+		}
+
+	}).unwrap();
+	let mut stats = stats.into_inner().unwrap();
+
+	println!("Delete cache items");
+	let results = queue.into_sorted_vec();
+	for chunk in results.chunks(10) {
+		for fileinfo in chunk {
+			stats.count(process_header_file(fileinfo));
+		}
+		let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+		if usage < 99.0 {
+			break;
+		}
+		yield_now();
+	}
+
+	Ok(stats)
+}
+
+/// Processes one folder recursively
+fn process_folder(
+	path: &Path,
+	args: &Args,
+	now: &SystemTime,
+	sender: &SyncSender<CacheFileInfo>,
+) -> Result<Stats, io::Error> {
 	let mut stats = Stats::default();
 
 	// First clean old temporary files
@@ -399,23 +422,24 @@ fn process_folder_parallel(
 		}
 	}
 
-	// Run `process_folder` in parallel (in up to CPUs/2 threads)
-	stats.merge(
-		path.read_dir()?
-			.collect::<Vec<_>>()
-			.into_par_iter()
-			.map(|item| process_folder(&item?.path(), now, false, condition))
-			.sum(),
-	);
+	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+	let desperate = usage > 115.0;
+
+	stats.merge(scan_folder(path, now, false, sender, desperate)?);
+
 	Ok(stats)
 }
 
-/// Processes one folder recursively
-fn process_folder(
+/// Scans one subfolder recursively
+///
+/// Directly deletes definitely unneccessary files and folders and
+/// inserts all valid cache entries into `queue`.
+fn scan_folder(
 	path: &Path,
 	now: &SystemTime,
 	in_vary: bool,
-	condition: Condition,
+	sender: &SyncSender<CacheFileInfo>,
+	desperate: bool,
 ) -> Result<Stats, io::Error> {
 	let mut known_headers = HashSet::new();
 	let mut stats = Stats::default();
@@ -432,7 +456,22 @@ fn process_folder(
 			// Header files
 			else if let Some(stem) = name.strip_suffix(CACHE_HEADER_SUFFIX) {
 				known_headers.insert(stem.to_owned());
-				stats.count(process_header_file(&item, now, in_vary, condition));
+				if let Ok(fileinfo) = CacheFileInfo::new(&item) {
+					if !in_vary && !desperate {
+						let vdir_path = fileinfo.vary_path();
+						if vdir_path.exists() {
+							if let Ok(metadata) = vdir_path.metadata() {
+								if metadata.is_dir() && metadata.nlink() > 2 {
+									// Don't delete main header as long as a vary directory exists
+									continue;
+								}
+							}
+						}
+					}
+					sender.send(fileinfo).unwrap();
+				} else {
+					stats.add_failed();
+				}
 			}
 			// Data files
 			else if let Some(stem) = name.strip_suffix(CACHE_DATA_SUFFIX) {
@@ -452,18 +491,18 @@ fn process_folder(
 			}
 			// Recurse into vary directories
 			else if name.ends_with(CACHE_VDIR_SUFFIX) {
-				let _ = process_folder(&item.path(), now, true, condition);
-				stats.count_folder(delete_folder_if_not_recent(&item, None, now, 1800));
+				stats.merge_result(scan_folder(&item.path(), now, true, sender, desperate));
+				stats.count_folder(delete_folder_if_not_recent(&item, None, now, 300));
 			}
 			// Recurse into other directories
 			else if let Ok(metadata) = item.metadata() {
 				if metadata.is_dir() {
-					stats.merge_result(process_folder(&item.path(), now, in_vary, condition));
+					stats.merge_result(scan_folder(&item.path(), now, in_vary, sender, desperate));
 					stats.count_folder(delete_folder_if_not_recent(
 						&item,
 						Some(metadata),
 						now,
-						1800,
+						300,
 					));
 				}
 			}
@@ -472,7 +511,7 @@ fn process_folder(
 
 	// Be somewhat nice to other processes by yielding the CPU after each non-vary directory
 	if !in_vary {
-		thread::yield_now();
+		yield_now();
 	}
 
 	Ok(stats)
@@ -505,86 +544,25 @@ fn calculate_usage(minspace: SizeSpec, mininodes: SizeSpec) -> f64 {
 ///
 /// Parses the arguments and runs the cleanup
 fn main() {
-	let args = Args::parse();
+	let mut args = Args::parse();
 
-	let cpus = num_cpus::get();
-	let threads = max(1, cpus / 2);
-	rayon::ThreadPoolBuilder::new()
-		.num_threads(threads)
-		.build_global()
-		.unwrap();
+	if args.jobs == 0 {
+		let cpus = num_cpus::get();
+		args.jobs = max(1, cpus / 2)
+	}
 
-	std::env::set_current_dir(args.path).expect("Couldn't change to cache directory.");
+	std::env::set_current_dir(&args.path).expect("Couldn't change to cache directory.");
 	let now = SystemTime::now();
 
 	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
 
 	println!("Usage: {:.1}% of target space/inode limit", usage);
 
-	if usage >= 99.5 {
-		// Run through these conditions until there is enough free space
-		for condition in [
-			Condition::Expired(Duration::new(600, 0)),
-			Condition::Expired(Duration::new(120, 0)),
-			Condition::Expired(Duration::new(30, 0)),
-			Condition::Accessed(Duration::new(10800, 0)),
-			Condition::Accessed(Duration::new(3600, 0)),
-			Condition::Accessed(Duration::new(1800, 0)),
-			Condition::Accessed(Duration::new(600, 0)),
-			Condition::Accessed(Duration::new(120, 0)),
-			Condition::Modified(Duration::new(600, 0)),
-			Condition::Modified(Duration::new(120, 0)),
-		] {
-			println!("Deleting cache contents with {}...", condition);
-			let result = process_folder_parallel(".".as_ref(), &now, condition);
+	if usage >= 90.0 {
+		println!("Pruning cache...");
 
-			if let Ok(stats) = result {
-				println!("{:?}", stats);
-			}
+		let result = process_folder_parallel(".".as_ref(), &args, &now);
 
-			if calculate_usage(args.min_free_space, args.min_free_inodes) < 100.0 {
-				break;
-			}
-		}
-	} else if usage > 98.5 {
-		let condition = Condition::Expired(Duration::new(1200, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
-		if let Ok(stats) = result {
-			println!("{:?}", stats);
-		}
-	} else if usage > 97.0 {
-		let condition = Condition::Expired(Duration::new(1800, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
-		if let Ok(stats) = result {
-			println!("{:?}", stats);
-		}
-	} else if usage > 95.0 {
-		let condition = Condition::Expired(Duration::new(3600, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
-		if let Ok(stats) = result {
-			println!("{:?}", stats);
-		}
-	} else if usage > 90.0 {
-		let condition = Condition::Expired(Duration::new(10800, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
-		if let Ok(stats) = result {
-			println!("{:?}", stats);
-		}
-	} else if usage > 80.0 {
-		let condition = Condition::Expired(Duration::new(21600, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
-		if let Ok(stats) = result {
-			println!("{:?}", stats);
-		}
-	} else if usage > 60.0 {
-		let condition = Condition::Expired(Duration::new(86400, 0));
-		println!("Deleting cache contents with {}...", condition);
-		let result = process_folder_parallel(".".as_ref(), &now, condition);
 		if let Ok(stats) = result {
 			println!("{:?}", stats);
 		}
