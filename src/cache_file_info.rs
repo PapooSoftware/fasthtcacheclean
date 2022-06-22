@@ -63,7 +63,6 @@ impl CacheFileInfo {
 		vary_path
 	}
 
-
 	#[inline]
 	pub fn expires(&self) -> &SystemTime {
 		&self.expires
@@ -83,7 +82,7 @@ impl CacheFileInfo {
 impl PartialOrd<Self> for CacheFileInfo {
 	#[inline]
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		Some(self.cmp(&other))
+		Some(self.cmp(other))
 	}
 }
 

@@ -1,33 +1,38 @@
+#[macro_use]
+extern crate log;
+
 use clap::Parser;
+use crossbeam::thread;
 use nix::sys::statfs::statfs;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use std::cmp::max;
 use std::collections::HashSet;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
+use std::mem::drop;
 use std::num::ParseFloatError;
 use std::num::ParseIntError;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::SystemTime;
-use std::{fmt, io};
-use std::mem::drop;
-use thiserror::Error;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
-use crossbeam::thread;
 use std::thread::yield_now;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use std::time::{Instant, SystemTime};
+use std::{fmt, io};
+use thiserror::Error;
 
 mod apache_cache_header;
 mod cache_file_info;
 mod cache_priority_queue;
 
-use cache_priority_queue::CachePriorityQueue;
 use cache_file_info::CacheFileInfo;
+use cache_priority_queue::CachePriorityQueue;
 
 #[cfg(test)]
 mod tests;
+
+const MAX_DELETE_COUNT: usize = 1000000;
 
 const CACHE_HEADER_SUFFIX: &str = ".header";
 const CACHE_DATA_SUFFIX: &str = ".data";
@@ -46,7 +51,7 @@ struct Args {
 	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
 	/// specify Kilobytes, Megabytes, Gigabytes, Terabytes or a percentage
 	/// of the total disk size.
-	#[clap(short='f', long, value_name="BYTES|PERCENT", default_value_t=SizeSpec::Percentage(5.0))]
+	#[clap(short='f', long, value_name="BYTES|PERCENT", default_value_t=SizeSpec::Percentage(10.0))]
 	min_free_space: SizeSpec,
 
 	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
@@ -58,8 +63,12 @@ struct Args {
 	/// Jobs to run simultaneously. (0 for automatic selection based on available CPUs)
 	///
 	/// Use `-j1` for slow storage devices where parallel accesses slow down too much.
-	#[clap(short, long, default_value_t=0)]
+	#[clap(short, long, default_value_t = 0)]
 	jobs: usize,
+
+	/// Increase verbosity
+	#[clap(short, long, action = clap::ArgAction::Count)]
+	verbose: u8,
 }
 
 /// Representation for a user-specified size limit (percentage or absolute)
@@ -302,15 +311,12 @@ fn delete_folder_if_not_recent(
 	match result {
 		Ok(()) => Ok(true),
 		Err(e) if matches!(e.raw_os_error(), Some(libc::ENOTEMPTY)) => Ok(false),
-		Err(e) => Err(From::from(e)),
+		Err(e) => Err(e),
 	}
 }
 
 /// Deletes a data file, if there is a newer vary directory
-fn delete_data_if_newer_vary(
-	entry: &DirEntry,
-	now: &SystemTime,
-) -> Result<bool, io::Error> {
+fn delete_data_if_newer_vary(entry: &DirEntry, now: &SystemTime) -> Result<bool, io::Error> {
 	let mut vary_header_path = entry.path();
 	vary_header_path.set_extension(CACHE_HEADER_VDIR_EXTENSION);
 	if vary_header_path.exists() {
@@ -324,23 +330,20 @@ fn delete_data_if_newer_vary(
 }
 
 /// Processes a header file
-fn process_header_file(
-	fileinfo: &CacheFileInfo,
-) -> Result<bool, io::Error> {
+fn process_header_file(fileinfo: &CacheFileInfo) -> Result<bool, io::Error> {
 	let data_path = fileinfo.data_path();
 	let _ = remove_file(data_path);
-	remove_file(fileinfo.header_path()).map(|_| true).map_err(From::from)
+	remove_file(fileinfo.header_path())
+		.map(|_| true)
+		.map_err(From::from)
 }
 
 /// Processes the subfolders of a folder in parallel
-fn process_folder_parallel(
-	path: &Path,
-	args: &Args,
-	now: &SystemTime,
-) -> Result<Stats, io::Error> {
+fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result<Stats, io::Error> {
 	let mut stats = Stats::default();
 
-	println!("Clean temp");
+	debug!("Cleaning up temporary files...");
+	let start = Instant::now();
 	// First clean old temporary files
 	for item in path.read_dir()?.flatten() {
 		if let Some(name) = item.file_name().to_str() {
@@ -352,16 +355,19 @@ fn process_folder_parallel(
 			}
 		}
 	}
+	debug!("Cleanup done ({:.2}s).", start.elapsed().as_secs_f64());
 
 	let mut folders = path.read_dir()?.collect::<Vec<_>>();
 	let chunk_size = (folders.len() / args.jobs) + 1;
 	let stats = Mutex::new(stats);
-	let mut queue = CachePriorityQueue::with_capacity(1000, 1000000);
+	let mut queue = CachePriorityQueue::with_capacity(1000, MAX_DELETE_COUNT);
 
+	// Shuffle the subfolders to evenly distribute to the threads
 	let mut rng = thread_rng();
 	folders.shuffle(&mut rng);
 
-	println!("Scan directories");
+	debug!("Scanning directories... ({} threads)", args.jobs);
+	let start = Instant::now();
 	// Run `process_folder` in parallel (in up to CPUs/2 threads)
 	thread::scope(|s| {
 		let (sender, receiver) = sync_channel(1000);
@@ -370,7 +376,7 @@ fn process_folder_parallel(
 			let sender = sender.clone();
 			let stats = &stats;
 			s.spawn(move |_| {
-				for folder in chunk.into_iter().flatten() {
+				for folder in chunk.iter().flatten() {
 					let result = process_folder(&folder.path(), args, now, &sender);
 					stats.lock().unwrap().merge_result(result);
 				}
@@ -381,11 +387,13 @@ fn process_folder_parallel(
 		while let Ok(fileinfo) = receiver.recv() {
 			queue.push(fileinfo);
 		}
-
-	}).unwrap();
+	})
+	.unwrap();
+	debug!("Scanning done ({:.2}s).", start.elapsed().as_secs_f64());
 	let mut stats = stats.into_inner().unwrap();
 
-	println!("Delete cache items");
+	debug!("Deleting cache entries...");
+	let start = Instant::now();
 	let results = queue.into_sorted_vec();
 	for chunk in results.chunks(10) {
 		for fileinfo in chunk {
@@ -397,6 +405,7 @@ fn process_folder_parallel(
 		}
 		yield_now();
 	}
+	debug!("Deleting done ({:.2}s).", start.elapsed().as_secs_f64());
 
 	Ok(stats)
 }
@@ -423,7 +432,7 @@ fn process_folder(
 	}
 
 	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
-	let desperate = usage > 115.0;
+	let desperate = usage > 105.0;
 
 	stats.merge(scan_folder(path, now, false, sender, desperate)?);
 
@@ -540,12 +549,42 @@ fn calculate_usage(minspace: SizeSpec, mininodes: SizeSpec) -> f64 {
 	}
 }
 
+fn init_logging(args: &Args) {
+	#![cfg(feature = "systemd")]
+	if systemd_journal_logger::connected_to_journal() {
+		systemd_journal_logger::init().unwrap();
+
+		log::set_max_level(match args.verbose {
+			0 => log::LevelFilter::Warn,
+			1 => log::LevelFilter::Info,
+			2 => log::LevelFilter::Debug,
+			_ => log::LevelFilter::Trace,
+		});
+		return;
+	}
+
+	let mut logger = env_logger::Builder::from_default_env();
+	if args.verbose > 0 {
+		logger.filter_level(match args.verbose {
+			1 => log::LevelFilter::Info,
+			2 => log::LevelFilter::Debug,
+			_ => log::LevelFilter::Trace,
+		});
+	}
+	logger.init();
+}
+
 /// Main function
 ///
-/// Parses the arguments and runs the cleanup
+/// Parses the arguments, initializes logging and runs the cleanup job
 fn main() {
+	// Parse command line arguments
 	let mut args = Args::parse();
 
+	// Initialize logging
+	init_logging(&args);
+
+	// Calculate number of threads if set to "auto"
 	if args.jobs == 0 {
 		let cpus = num_cpus::get();
 		args.jobs = max(1, cpus / 2)
@@ -555,16 +594,18 @@ fn main() {
 	let now = SystemTime::now();
 
 	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
-
-	println!("Usage: {:.1}% of target space/inode limit", usage);
+	info!("Usage: {:.1}% of target space/inode limit", usage);
 
 	if usage >= 90.0 {
-		println!("Pruning cache...");
+		info!("Pruning cache...");
 
 		let result = process_folder_parallel(".".as_ref(), &args, &now);
 
 		if let Ok(stats) = result {
-			println!("{:?}", stats);
+			info!(
+				"Statistics: {} deleted files, {} deleted folders, {} failed to delete",
+				stats.deleted, stats.deleted_folders, stats.failed
+			);
 		}
 	} else {
 		// do nothing
