@@ -10,24 +10,22 @@ use std::cmp::max;
 use std::collections::HashSet;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
 use std::mem::drop;
-use std::num::ParseFloatError;
-use std::num::ParseIntError;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::thread::yield_now;
 use std::time::{Instant, SystemTime};
 use std::{fmt, io};
-use thiserror::Error;
 
 mod apache_cache_header;
 mod cache_file_info;
 mod cache_priority_queue;
+mod size_spec;
 
 use cache_file_info::CacheFileInfo;
 use cache_priority_queue::CachePriorityQueue;
+use size_spec::SizeSpec;
 
 #[cfg(test)]
 mod tests;
@@ -69,46 +67,6 @@ struct Args {
 	/// Increase verbosity
 	#[clap(short, long, action = clap::ArgAction::Count)]
 	verbose: u8,
-}
-
-/// Representation for a user-specified size limit (percentage or absolute)
-#[derive(Debug, Clone, Copy)]
-enum SizeSpec {
-	Percentage(f64),
-	Absolute(u64),
-}
-
-impl fmt::Display for SizeSpec {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			SizeSpec::Percentage(n) => write!(f, "{}%", n),
-			SizeSpec::Absolute(n) => {
-				let n = *n;
-				if n < 1000 {
-					write!(f, "{}", n)
-				} else if n < 1000000 {
-					write!(f, "{}K", (n as f64) / 1000.0)
-				} else if n < 1000000000 {
-					write!(f, "{}M", (n as f64) / 1000000.0)
-				} else if n < 1000000000000 {
-					write!(f, "{}G", (n as f64) / 1000000000.0)
-				} else {
-					write!(f, "{}T", (n as f64) / 1000000000000.0)
-				}
-			}
-		}
-	}
-}
-
-impl SizeSpec {
-	/// Return the absolute value when given the available `total`
-	#[inline]
-	pub fn value(&self, total: u64) -> u64 {
-		match self {
-			SizeSpec::Percentage(n) => (*n / 100.0 * (total as f64)) as u64,
-			SizeSpec::Absolute(n) => *n,
-		}
-	}
 }
 
 /// Statistic results
@@ -189,54 +147,6 @@ impl<E: fmt::Debug> std::iter::Sum<Result<Self, E>> for Stats {
 			acc.merge_result(item);
 		}
 		acc
-	}
-}
-
-/// Error type for parsing a `SizeSpec`
-#[derive(Error, Debug)]
-pub enum ParseSizeSpecError {
-	#[error("expected a positive numeric value with an optional unit")]
-	EmptyString,
-	#[error("expected a positive numeric value with an optional unit")]
-	InvalidInt(#[from] ParseIntError),
-	#[error("expected a positive numeric value with an optional unit")]
-	InvalidFloat(#[from] ParseFloatError),
-	#[error("`{0}` is not a valid unit. Known units are `K`, `M`, `G`, `T`, `%`.")]
-	InvalidUnit(char),
-}
-
-/// Parsing a string into a `SizeSpec`
-impl FromStr for SizeSpec {
-	type Err = ParseSizeSpecError;
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		let first_char = s.chars().next().ok_or(ParseSizeSpecError::EmptyString)?;
-		let last_char = s
-			.chars()
-			.rev()
-			.next()
-			.ok_or(ParseSizeSpecError::EmptyString)?;
-
-		if first_char == '-' {
-			return Err(s.parse::<u64>().unwrap_err().into());
-		}
-
-		match last_char {
-			'0'..='9' => Ok(SizeSpec::Absolute(s.parse::<u64>()?)),
-			'K' | 'k' => Ok(SizeSpec::Absolute(
-				(s[..s.len() - 1].parse::<f64>()? * 1000.0) as u64,
-			)),
-			'M' => Ok(SizeSpec::Absolute(
-				(s[..s.len() - 1].parse::<f64>()? * 1000000.0) as u64,
-			)),
-			'G' => Ok(SizeSpec::Absolute(
-				(s[..s.len() - 1].parse::<f64>()? * 1000000000.0) as u64,
-			)),
-			'T' => Ok(SizeSpec::Absolute(
-				(s[..s.len() - 1].parse::<f64>()? * 1000000000000.0) as u64,
-			)),
-			'%' => Ok(SizeSpec::Percentage(s[..s.len() - 1].parse::<f64>()?)),
-			_ => Err(ParseSizeSpecError::InvalidUnit(last_char)),
-		}
 	}
 }
 
