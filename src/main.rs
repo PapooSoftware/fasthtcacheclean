@@ -2,23 +2,22 @@
 extern crate log;
 
 use clap::Parser;
-use crossbeam::thread;
+use crossbeam::{channel, thread};
 use nix::sys::statfs::statfs;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use std::cmp::max;
 use std::collections::HashSet;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
 use std::mem::drop;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::thread::yield_now;
 use std::time::{Instant, SystemTime};
 use std::{fmt, io};
 
-mod apache_cache_header;
+mod apache_cache;
 mod cache_file_info;
 mod cache_priority_queue;
 mod size_spec;
@@ -174,7 +173,7 @@ fn delete_file_if_not_recent(
 			return Ok(false);
 		}
 	}
-	remove_file(entry.path()).map(|_| true).map_err(From::from)
+	remove_file(entry.path()).map(|_| true)
 }
 
 /// Deletes an empty folder, if it wasn't modified or accessed recently
@@ -243,9 +242,7 @@ fn delete_data_if_newer_vary(entry: &DirEntry, now: &SystemTime) -> Result<bool,
 fn process_header_file(fileinfo: &CacheFileInfo) -> Result<bool, io::Error> {
 	let data_path = fileinfo.data_path();
 	let _ = remove_file(data_path);
-	remove_file(fileinfo.header_path())
-		.map(|_| true)
-		.map_err(From::from)
+	remove_file(fileinfo.header_path()).map(|_| true)
 }
 
 /// Processes the subfolders of a folder in parallel
@@ -280,7 +277,7 @@ fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result
 	let start = Instant::now();
 	// Run `process_folder` in parallel (in up to CPUs/2 threads)
 	thread::scope(|s| {
-		let (sender, receiver) = sync_channel(1000);
+		let (sender, receiver) = channel::bounded(1000);
 
 		for chunk in folders.chunks(chunk_size) {
 			let sender = sender.clone();
@@ -313,6 +310,9 @@ fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result
 		if usage < 99.0 {
 			break;
 		}
+		else if usage < 99.5 && rng.gen::<u8>() < 1 {
+			break;
+		}
 		yield_now();
 	}
 	debug!("Deleting done ({:.2}s).", start.elapsed().as_secs_f64());
@@ -325,22 +325,9 @@ fn process_folder(
 	path: &Path,
 	args: &Args,
 	now: &SystemTime,
-	sender: &SyncSender<CacheFileInfo>,
+	sender: &channel::Sender<CacheFileInfo>,
 ) -> Result<Stats, io::Error> {
 	let mut stats = Stats::default();
-
-	// First clean old temporary files
-	for item in path.read_dir()?.flatten() {
-		if let Some(name) = item.file_name().to_str() {
-			// Temporary files -> only delete if old
-			if name.len() == AP_TEMPFILE_BASE.len() + AP_TEMPFILE_SUFFIX.len()
-				&& name.starts_with(AP_TEMPFILE_BASE)
-			{
-				stats.count(delete_file_if_not_recent(&item, now, 600));
-			}
-		}
-	}
-
 	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
 	let desperate = usage > 105.0;
 
@@ -357,7 +344,7 @@ fn scan_folder(
 	path: &Path,
 	now: &SystemTime,
 	in_vary: bool,
-	sender: &SyncSender<CacheFileInfo>,
+	sender: &channel::Sender<CacheFileInfo>,
 	desperate: bool,
 ) -> Result<Stats, io::Error> {
 	let mut known_headers = HashSet::new();
@@ -376,13 +363,18 @@ fn scan_folder(
 			else if let Some(stem) = name.strip_suffix(CACHE_HEADER_SUFFIX) {
 				known_headers.insert(stem.to_owned());
 				if let Ok(fileinfo) = CacheFileInfo::new(&item) {
-					if !in_vary && !desperate {
-						let vdir_path = fileinfo.vary_path();
-						if vdir_path.exists() {
-							if let Ok(metadata) = vdir_path.metadata() {
-								if metadata.is_dir() && metadata.nlink() > 2 {
-									// Don't delete main header as long as a vary directory exists
-									continue;
+					if !in_vary && fileinfo.is_vary() {
+						// Delete orphaned data file if the header indicates a vary directory
+						stats.count(remove_file(&fileinfo.data_path()).map(|_| true));
+
+						// Don't delete main header as long as a vary directory exists (as long as not in desperate mode)
+						if !desperate {
+							let vdir_path = fileinfo.vary_path();
+							if vdir_path.exists() {
+								if let Ok(metadata) = vdir_path.metadata() {
+									if metadata.is_dir() && metadata.nlink() > 2 {
+										continue;
+									}
 								}
 							}
 						}
@@ -512,6 +504,8 @@ fn main() {
 		let result = process_folder_parallel(".".as_ref(), &args, &now);
 
 		if let Ok(stats) = result {
+			let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+			info!("Usage: {:.1}% of target space/inode limit", usage);
 			info!(
 				"Statistics: {} deleted files, {} deleted folders, {} failed to delete",
 				stats.deleted, stats.deleted_folders, stats.failed

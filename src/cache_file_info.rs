@@ -5,7 +5,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::apache_cache_header::read_expiration_time;
+use crate::apache_cache;
 use crate::CACHE_DATA_SUFFIX;
 use crate::CACHE_HEADER_VDIR_EXTENSION;
 
@@ -13,7 +13,7 @@ use crate::CACHE_HEADER_VDIR_EXTENSION;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheFileInfo {
 	header_path: PathBuf,
-	expires: SystemTime,
+	header_info: apache_cache::Header,
 	modified: SystemTime,
 	accessed: SystemTime,
 }
@@ -31,11 +31,11 @@ impl CacheFileInfo {
 		options.read(true);
 		options.custom_flags(libc::O_NOATIME | libc::O_NOCTTY | libc::O_CLOEXEC);
 		let mut file = options.open(&header_path)?;
-		let expires = read_expiration_time(&mut file)?;
+		let header_info = apache_cache::parse(&mut file)?;
 
 		Ok(Self {
 			header_path,
-			expires,
+			header_info,
 			modified,
 			accessed,
 		})
@@ -65,7 +65,7 @@ impl CacheFileInfo {
 
 	#[inline]
 	pub fn expires(&self) -> &SystemTime {
-		&self.expires
+		&self.header_info.expiry
 	}
 
 	#[inline]
@@ -76,6 +76,11 @@ impl CacheFileInfo {
 	#[inline]
 	pub fn accessed(&self) -> &SystemTime {
 		&self.accessed
+	}
+
+	#[inline]
+	pub fn is_vary(&self) -> bool {
+		matches!(self.header_info.format, apache_cache::Format::Vary)
 	}
 }
 
@@ -89,7 +94,8 @@ impl PartialOrd<Self> for CacheFileInfo {
 impl Ord for CacheFileInfo {
 	#[inline]
 	fn cmp(&self, other: &Self) -> Ordering {
-		let cmp1 = max(&self.expires, &self.modified).cmp(max(&other.expires, &other.modified));
+		let cmp1 = max(&self.header_info.expiry, &self.modified)
+			.cmp(max(&other.header_info.expiry, &other.modified));
 		let cmp2 = max(&self.accessed, &self.modified).cmp(max(&other.accessed, &other.modified));
 		let cmp3 = self.modified.cmp(&other.modified);
 

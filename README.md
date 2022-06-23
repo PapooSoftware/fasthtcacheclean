@@ -32,28 +32,12 @@ systemctl start papoo-htcacheclean.timer
 
 ## Funktionsweise
 
-Anders als `apache-htcacheclean`, welches zunächst alle Dateien des Caches auflistet, nach Größe sortiert und dann erst beginnt zu löschen,
-arbeitet dieses Script direkter und schneller in mehreren Runden, löscht dafür u.U. mehr als nötig.
+Die Funktionsweise ist ähnlich wie bei `apache-htcacheclean` mit einigen Optimierungen:
 
-- Es wird mit CPUs/2 Threads gleichzeitig gearbeitet.
-- Es wird bestimmt, wie viel Speicher und wie viele Inodes noch auf der Partition frei sind.
-- Der freie Speicherplatz wird mit dem festgelegten Limit verglichen
-  - Wenn nicht mehr genug Speicher verfügbar ist (99,5 % des Limits oder mehr erreicht), wird die folgende Liste abgearbeitet, bis weniger als 100% verbraucht werden.
-    1. Expiry länger 10 Minuten her
-    2. Expiry länger als 2 Minute her
-    3. Expiry länger als 30 Sekunden her
-    4. Letzter Zugriff länger als 3 Stunden her
-    4. Letzter Zugriff länger als 1 Stunde her
-    4. Letzter Zugriff länger als 30 Minuten her
-    6. Letzter Zugriff länger als 10 Minuten her
-    7. Letzter Zugriff länger als 2 Minuten her
-    8. Bearbeitung länger als 10 Minuten her
-    9. Bearbeitung länger als 2 Minuten her
-  - Wenn 98,5 % erreicht sind, wir nur alles mit Expiry > 20 Minuten gelöscht
-  - Wenn 97 % erreicht sind, wir nur alles mit Expiry > 30 Minuten gelöscht
-  - Wenn 95 % erreicht sind, wird nur alles mit Expiry > 1 Stunde gelöscht
-  - Wenn 90 % erreicht sind, wird nur alles mit Expiry > 3 Stunden gelöscht
-  - Wenn 80 % erreicht sind, wird nur alles mit Expiry > 6 Stunden gelöscht
-  - Wenn 60 % erreicht sind, wird nur alles mit Expiry > 24 Stunden gelöscht
-
-Die Grenzen werden noch anhand der empirischen Ergebnisse auf dem 5f-Server angepasst.
+1. Zunächst wird geprüft, ob das Limit bereits überschritten oder fast erreicht ist. Ab 90 % Auslastung werden die ersten Dateien gelöscht.
+2. Dann werden alte temporäre Dateien im Hauptverzeichnis des Caches gelöscht (länger als 15 Minuten nicht modizifiert).
+3. Dann wird der Verzeichnisbaum durchsucht (standardmäßig mit CPUs/2 Threads gleichzeitig).
+   Dabei werden alte leere Verzeichnisse und verwaiste `.data`-Dateien direkt gelöscht.
+   Die Einträge werden dabei nach Expiry-Datum, Access-Datum und Modification-Datum in eine Priority-Queue einsortiert.
+   Um den RAM-Bedarf gering zu halten, werden nur die 1.000.000 ältesten Einträge berücksichtigt.
+4. Die gefundenen Cache-Einträge werden dann beginnend mit dem ältesten gelöscht, bis nur noch 99.0 bis 99.5 % des Limits verwendet werden.
