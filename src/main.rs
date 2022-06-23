@@ -225,20 +225,6 @@ fn delete_folder_if_not_recent(
 	}
 }
 
-/// Deletes a data file, if there is a newer vary directory
-fn delete_data_if_newer_vary(entry: &DirEntry, now: &SystemTime) -> Result<bool, io::Error> {
-	let mut vary_header_path = entry.path();
-	vary_header_path.set_extension(CACHE_HEADER_VDIR_EXTENSION);
-	if vary_header_path.exists() {
-		let vary_modified = vary_header_path.metadata()?.modified()?;
-		let data_modified = entry.metadata()?.modified()?;
-		if vary_modified > data_modified {
-			return delete_file_if_not_recent(entry, now, 60);
-		}
-	}
-	Ok(false)
-}
-
 /// Processes a header file
 fn process_header_file(fileinfo: &CacheFileInfo) -> Result<bool, io::Error> {
 	let data_path = fileinfo.data_path();
@@ -392,10 +378,6 @@ fn scan_folder(
 						stats.count(delete_file_if_not_recent(&item, now, 120));
 						continue;
 					}
-				}
-				if !in_vary {
-					// Delete old data file if there is a newer Vary directory
-					stats.count(delete_data_if_newer_vary(&item, now));
 				}
 			}
 			// Recurse into vary directories
