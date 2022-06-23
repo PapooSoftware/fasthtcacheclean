@@ -1,9 +1,12 @@
 [package]
-name = "papoo-htcacheclean"
+name = "fasthtcacheclean"
 version = "0.2.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Christoph Grenz (Papoo Software & Media GmbH) <info@papoo.de>"]
+description = "A faster Apache disk cache cleaner"
+keywords = ["apache", "httpd", "htcacheclean", "mod_cache_disk"]
+categories = ["command-line-utilities"]
+# license = "..."
 
 [features]
 default = ["systemd"]

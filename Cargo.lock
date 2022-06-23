@@ -217,6 +217,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fasthtcacheclean"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "crossbeam",
+ "env_logger",
+ "libc",
+ "log",
+ "nix 0.24.1",
+ "num_cpus",
+ "rand",
+ "systemd-journal-logger",
+ "thiserror",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -399,22 +415,6 @@ name = "os_str_bytes"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21326818e99cfe6ce1e524c2a805c189a99b5ae555a35d19f9a284b427d86afa"
-
-[[package]]
-name = "papoo-htcacheclean"
-version = "0.2.0"
-dependencies = [
- "clap",
- "crossbeam",
- "env_logger",
- "libc",
- "log",
- "nix 0.24.1",
- "num_cpus",
- "rand",
- "systemd-journal-logger",
- "thiserror",
-]
 
 [[package]]
 name = "ppv-lite86"

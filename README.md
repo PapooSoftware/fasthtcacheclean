@@ -4,7 +4,7 @@ A replacement for `apache-htcacheclean`, which is faster in cleaning the disk ca
 
 It is primarily designed for disk caches on a separate partition or RAM disk.
 
-Daemon mode is currently not supported. It has to be run via a systemd timer or a cronjob.
+Only unixoid operating systems like Linux are supported. Daemon mode is currently not supported. It has to be run via a systemd timer or a cronjob.
 
 ## Building and Installation
 
@@ -20,7 +20,7 @@ Then `fasthtcacheclean` can be built with
 	cargo build --release
 ```
 
-The result can be found in `target/release/papoo-htcacheclean`.
+The result can be found in `target/release/fasthtcacheclean`.
 
 To install it:
 
