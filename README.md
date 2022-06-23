@@ -1,6 +1,6 @@
-# Apache Disk Cache Clean Tool
+# Apahachi Cache Swiper
 
-Ein rudimentärer Ersatz für `apache-htcacheclean`, der deutlich schneller den Cache bereinigt.
+Ein Ersatz für `apache-htcacheclean`, der deutlich schneller den Cache bereinigt.
 
 ## Installieren
 

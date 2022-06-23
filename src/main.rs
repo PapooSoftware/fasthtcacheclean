@@ -8,6 +8,7 @@ use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 use std::cmp::max;
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
 use std::mem::drop;
 use std::os::unix::fs::MetadataExt;
@@ -307,10 +308,7 @@ fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result
 			stats.count(process_header_file(fileinfo));
 		}
 		let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
-		if usage < 99.0 {
-			break;
-		}
-		else if usage < 99.5 && rng.gen::<u8>() < 1 {
+		if usage < 99.0 || (usage < 99.5 && rng.gen::<u8>() < 1) {
 			break;
 		}
 		yield_now();
@@ -365,7 +363,7 @@ fn scan_folder(
 				if let Ok(fileinfo) = CacheFileInfo::new(&item) {
 					if !in_vary && fileinfo.is_vary() {
 						// Delete orphaned data file if the header indicates a vary directory
-						stats.count(remove_file(&fileinfo.data_path()).map(|_| true));
+						stats.count::<Infallible>(Ok(remove_file(&fileinfo.data_path()).is_ok()));
 
 						// Don't delete main header as long as a vary directory exists (as long as not in desperate mode)
 						if !desperate {
