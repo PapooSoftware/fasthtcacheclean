@@ -2,7 +2,7 @@
 
 A replacement for `apache-htcacheclean`, which is faster in cleaning the disk cache.
 
-It
+It is primarily designed for disk caches on a separate partition or RAM disk.
 
 Daemon mode is currently not supported. It has to be run via a systemd timer or a cronjob.
 
