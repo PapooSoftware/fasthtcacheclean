@@ -90,3 +90,68 @@ impl FromStr for SizeSpec {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Tests string -> `SizeSpec` -> string conversion
+	#[test]
+	fn test_roundtrip() {
+		for string in [
+			"0", "100", "50K", "1M", "42G", "1T", "0%", "1%", "99.5%", "101%",
+		] {
+			let value: SizeSpec = string.parse().unwrap();
+			assert_eq!(string, value.to_string());
+		}
+		assert_eq!("512", "0.512K".parse::<SizeSpec>().unwrap().to_string());
+		assert_eq!("5.124K", "5124".parse::<SizeSpec>().unwrap().to_string());
+	}
+
+	/// Tests `SizeSpec` parse failure on negative values
+	#[test]
+	fn test_negative_error() {
+		for string in [
+			"-0", "-1", "-50K", "-1M", "-42G", "-1T", "-0%", "-1%", "-99.5%", "-101%",
+		] {
+			assert!(string.parse::<SizeSpec>().is_err());
+		}
+	}
+
+	/// Tests `SizeSpec` parse failure on empty string
+	#[test]
+	fn test_empty_error() {
+		assert!(matches!(
+			"".parse::<SizeSpec>().unwrap_err(),
+			ParseSizeSpecError::EmptyString
+		));
+	}
+
+	/// Tests `SizeSpec` parse failure on invalid unit suffixes
+	#[test]
+	fn test_unit_error() {
+		assert!(matches!(
+			"1x".parse::<SizeSpec>().unwrap_err(),
+			ParseSizeSpecError::InvalidUnit('x')
+		));
+		assert!(matches!(
+			"5.5!".parse::<SizeSpec>().unwrap_err(),
+			ParseSizeSpecError::InvalidUnit('!')
+		));
+	}
+
+	// Tests `SizeSpec::value()` output
+	#[test]
+	fn test_value() {
+		let a = SizeSpec::Absolute(1000);
+		assert_eq!(a.value(0), 1000);
+		assert_eq!(a.value(9999999), 1000);
+		let b = SizeSpec::Percentage(10.0);
+		assert_eq!(b.value(10000), 1000);
+		assert_eq!(b.value(10), 1);
+		assert_eq!(b.value(1), 0);
+		let c = SizeSpec::Percentage(0.0);
+		assert_eq!(b.value(1), 0);
+		assert_eq!(c.value(10000000), 0);
+	}
+}

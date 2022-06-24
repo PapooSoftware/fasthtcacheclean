@@ -81,25 +81,30 @@ impl<T: Ord> CachePriorityQueue<T> {
 }
 
 #[cfg(test)]
-#[test]
-fn test() {
-	let mut h = CachePriorityQueue::with_capacity(4, 4);
-	h.push(5);
-	h.push(7);
-	h.push(1);
-	assert_eq!(h.len(), 3);
-	assert_eq!(&h.into_sorted_vec(), &[1, 5, 7]);
+mod tests {
+	use super::*;
 
-	let mut h = CachePriorityQueue::new(2);
-	h.push(5);
-	h.push(7);
-	h.push(1);
-	assert_eq!(h.len(), 2);
-	assert_eq!(&h.into_sorted_vec(), &[1, 5]);
+	#[test]
+	fn test_queue() {
+		let mut h = CachePriorityQueue::with_capacity(4, 4);
+		h.push(5);
+		h.push(7);
+		h.push(1);
+		assert_eq!(h.len(), 3);
+		assert_eq!(&h.into_sorted_vec(), &[1, 5, 7]);
 
-	let mut h = CachePriorityQueue::new(2);
-	h.push(5);
-	h.clear();
-	assert_eq!(h.len(), 0);
-	assert_eq!(&h.into_sorted_vec(), &[]);
+		let mut h = CachePriorityQueue::new(2);
+		h.push(5);
+		h.push(7);
+		h.push(1);
+		h.push(9);
+		assert_eq!(h.len(), 2);
+		assert_eq!(&h.into_sorted_vec(), &[1, 5]);
+
+		let mut h = CachePriorityQueue::new(2);
+		h.push(5);
+		h.clear();
+		assert_eq!(h.len(), 0);
+		assert_eq!(&h.into_sorted_vec(), &[]);
+	}
 }

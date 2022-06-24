@@ -35,7 +35,7 @@ pub struct Header {
 /// Error type for when a file format could not be recognized.
 ///
 /// Will usually be wrapped in a `io::Error` of type `InvalidData`.
-#[derive(Error, Debug, Clone, Copy)]
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 #[error("unknown apache cache header format `{0}`")]
 pub struct FormatError(u32);
 
@@ -69,4 +69,61 @@ pub fn parse(mut f: impl io::Read) -> Result<Header, io::Error> {
 		format,
 		expiry: SystemTime::UNIX_EPOCH.add(Duration::from_micros(microseconds)),
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::fs::File;
+
+	#[test]
+	fn test_formats() {
+		assert_eq!(Format::try_from(65536), Err(FormatError(65536)));
+		assert_eq!(Format::try_from(5), Ok(Format::Vary));
+		assert_eq!(Format::try_from(6), Ok(Format::Disk));
+	}
+
+	#[test]
+	fn test_invalid_data() {
+		let error = parse([255u8, 255, 255, 255, 0, 0, 0, 0].as_ref()).unwrap_err();
+
+		assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+		let inner_error: FormatError = *error.get_ref().unwrap().downcast_ref().unwrap();
+		assert_eq!(
+			inner_error,
+			FormatError(u32::from_ne_bytes([255, 255, 255, 255]))
+		);
+	}
+
+	#[test]
+	fn test_vary_header() {
+		let file = File::open("testcases/vary.header").unwrap();
+		let header = parse(file).unwrap();
+
+		assert_eq!(header.format, Format::Vary);
+		assert_eq!(
+			header
+				.expiry
+				.duration_since(SystemTime::UNIX_EPOCH)
+				.unwrap()
+				.as_secs(),
+			1656536974
+		);
+	}
+
+	#[test]
+	fn test_disk_header() {
+		let file = File::open("testcases/disk.header").unwrap();
+		let header = parse(file).unwrap();
+
+		assert_eq!(header.format, Format::Disk);
+		assert_eq!(
+			header
+				.expiry
+				.duration_since(SystemTime::UNIX_EPOCH)
+				.unwrap()
+				.as_secs(),
+			1656657076
+		);
+	}
 }

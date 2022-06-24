@@ -10,25 +10,24 @@ use std::cmp::max;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
+use std::io;
 use std::mem::drop;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::yield_now;
 use std::time::{Instant, SystemTime};
-use std::{fmt, io};
 
 mod apache_cache;
 mod cache_file_info;
 mod cache_priority_queue;
 mod size_spec;
+mod stats;
 
 use cache_file_info::CacheFileInfo;
 use cache_priority_queue::CachePriorityQueue;
 use size_spec::SizeSpec;
-
-#[cfg(test)]
-mod tests;
+use stats::Stats;
 
 const MAX_DELETE_COUNT: usize = 1000000;
 
@@ -67,87 +66,6 @@ struct Args {
 	/// Increase verbosity
 	#[clap(short, long, action = clap::ArgAction::Count)]
 	verbose: u8,
-}
-
-/// Statistic results
-#[derive(Debug, Clone, Copy, Default)]
-struct Stats {
-	pub deleted: u64,
-	pub deleted_folders: u64,
-	pub failed: u64,
-}
-
-impl Stats {
-	/// Increment the failed counter
-	#[inline]
-	pub fn add_failed(&mut self) {
-		self.failed += 1;
-	}
-
-	/// Count the given result into the statistics
-	#[inline]
-	pub fn count<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
-		match r {
-			Ok(true) => self.deleted += 1,
-			Ok(false) => {}
-			Err(_) => {
-				self.failed += 1;
-			}
-		}
-	}
-
-	/// Count the given result for folder deletion into the statistics
-	#[inline]
-	pub fn count_folder<E: fmt::Debug>(&mut self, r: Result<bool, E>) {
-		match r {
-			Ok(true) => self.deleted_folders += 1,
-			Ok(false) => {}
-			Err(_) => {
-				self.failed += 1;
-			}
-		}
-	}
-
-	/// Merge the counts of the given stats-returning result into the statistics
-	#[inline]
-	pub fn merge_result<E: fmt::Debug>(&mut self, r: Result<Stats, E>) {
-		match r {
-			Ok(stats) => {
-				self.deleted += stats.deleted;
-				self.deleted_folders += stats.deleted_folders;
-				self.failed += stats.failed;
-			}
-			Err(_) => self.failed += 1,
-		}
-	}
-
-	/// Merge the counts of the given stats into the statistics
-	#[inline]
-	pub fn merge(&mut self, stats: Stats) {
-		self.deleted += stats.deleted;
-		self.deleted_folders += stats.deleted_folders;
-		self.failed += stats.failed;
-	}
-}
-
-impl std::iter::Sum<Self> for Stats {
-	fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-		let mut acc = Self::default();
-		for item in iter {
-			acc.merge(item);
-		}
-		acc
-	}
-}
-
-impl<E: fmt::Debug> std::iter::Sum<Result<Self, E>> for Stats {
-	fn sum<I: Iterator<Item = Result<Self, E>>>(iter: I) -> Self {
-		let mut acc = Self::default();
-		for item in iter {
-			acc.merge_result(item);
-		}
-		acc
-	}
 }
 
 /// Deletes a file, if it wasn't modified or accessed recently
@@ -278,7 +196,7 @@ fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result
 		}
 		drop(sender);
 
-		while let Ok(fileinfo) = receiver.recv() {
+		for fileinfo in receiver {
 			queue.push(fileinfo);
 		}
 	})

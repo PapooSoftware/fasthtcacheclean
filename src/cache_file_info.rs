@@ -92,6 +92,12 @@ impl PartialOrd<Self> for CacheFileInfo {
 }
 
 impl Ord for CacheFileInfo {
+	/// Chronological ordering useful for determining what should be deleted from the cache.
+	///
+	/// First orders by expiry or mtime (whatever is later),
+	/// then by mtime or atime (whatever is later), then by mtime.
+	///
+	/// Tie breaking is done by comparing the path.
 	#[inline]
 	fn cmp(&self, other: &Self) -> Ordering {
 		let cmp1 = max(&self.header_info.expiry, &self.modified)
