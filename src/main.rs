@@ -1,5 +1,5 @@
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 use clap::Parser;
 use crossbeam::{channel, thread};
@@ -9,6 +9,8 @@ use rand::{thread_rng, Rng};
 use std::cmp::max;
 use std::collections::HashSet;
 use std::convert::Infallible;
+use std::env;
+use std::error::Error;
 use std::fs::{remove_dir, remove_file, DirEntry, Metadata};
 use std::io;
 use std::mem::drop;
@@ -92,7 +94,16 @@ fn delete_file_if_not_recent(
 			return Ok(false);
 		}
 	}
-	remove_file(entry.path()).map(|_| true)
+	let path = entry.path();
+	let result = remove_file(&path);
+
+	debug!(
+		path=?&path,
+		error=result.as_ref().err().map(|v| v as &dyn Error),
+		"Deleting file {:?}: {}", path, if result.is_ok() {"ok"} else {"failed"}
+	);
+
+	result.map(|_| true)
 }
 
 /// Deletes an empty folder, if it wasn't modified or accessed recently
@@ -136,6 +147,12 @@ fn delete_folder_if_not_recent(
 	// Try to remove it
 	let path = entry.path();
 	let result = remove_dir(&path);
+	if result.is_ok() {
+		debug!(
+			path=?&path,
+			"Deleting folder {:?}: ok", path
+		);
+	}
 	match result {
 		Ok(()) => Ok(true),
 		Err(e) if matches!(e.raw_os_error(), Some(libc::ENOTEMPTY)) => Ok(false),
@@ -146,8 +163,23 @@ fn delete_folder_if_not_recent(
 /// Processes a header file
 fn process_header_file(fileinfo: &CacheFileInfo) -> Result<bool, io::Error> {
 	let data_path = fileinfo.data_path();
-	let _ = remove_file(data_path);
-	remove_file(fileinfo.header_path()).map(|_| true)
+	if remove_file(&data_path).is_ok() {
+		debug!(
+			path=?data_path,
+			"Deleting data file {:?}: ok", data_path,
+		);
+	}
+
+	let path = fileinfo.header_path();
+	let result = remove_file(path);
+
+	debug!(
+		path=?path,
+		error=result.as_ref().err().map(|v| v as &dyn Error),
+		"Deleting header file {:?}: {}", path, if result.is_ok() {"ok"} else {"failed"}
+	);
+
+	result.map(|_| true)
 }
 
 /// Processes the subfolders of a folder in parallel
@@ -242,6 +274,7 @@ fn process_folder(
 ///
 /// Directly deletes definitely unneccessary files and folders and
 /// inserts all valid cache entries into `queue`.
+#[instrument(level = "trace", skip(now, sender))]
 fn scan_folder(
 	path: &Path,
 	now: &SystemTime,
@@ -267,7 +300,16 @@ fn scan_folder(
 				if let Ok(fileinfo) = CacheFileInfo::new(&item) {
 					if !in_vary && fileinfo.is_vary() {
 						// Delete orphaned data file if the header indicates a vary directory
-						stats.count::<Infallible>(Ok(remove_file(&fileinfo.data_path()).is_ok()));
+						let data_path = fileinfo.data_path();
+						let result = remove_file(&data_path);
+						stats.count::<Infallible>(Ok(result.is_ok()));
+
+						if result.is_ok() {
+							debug!(
+								path=?&data_path,
+								"Deleting orphaned data file {:?}: ok", &data_path,
+							);
+						}
 
 						// Don't delete main header as long as a vary directory exists (as long as not in desperate mode)
 						if !desperate {
@@ -350,28 +392,42 @@ fn calculate_usage(minspace: SizeSpec, mininodes: SizeSpec) -> f64 {
 }
 
 fn init_logging(args: &Args) {
-	#![cfg(feature = "systemd")]
-	if systemd_journal_logger::connected_to_journal() {
-		systemd_journal_logger::init().unwrap();
+	use tracing_subscriber::filter::LevelFilter;
+	use tracing_subscriber::fmt::format::FmtSpan;
+	use tracing_subscriber::prelude::*;
+	use tracing_subscriber::{fmt, EnvFilter};
 
-		log::set_max_level(match args.verbose {
-			0 => log::LevelFilter::Warn,
-			1 => log::LevelFilter::Info,
-			2 => log::LevelFilter::Debug,
-			_ => log::LevelFilter::Trace,
-		});
-		return;
+	let filter_layer = EnvFilter::builder()
+		.with_default_directive(
+			match args.verbose {
+				0 => LevelFilter::WARN,
+				1 => LevelFilter::INFO,
+				2 => LevelFilter::DEBUG,
+				_ => LevelFilter::TRACE,
+			}
+			.into(),
+		)
+		.from_env_lossy();
+
+	#[cfg(feature = "systemd")]
+	if env::var_os("JOURNAL_STREAM").is_some() {
+		if let Ok(journal_layer) = tracing_journald::layer() {
+			tracing_subscriber::registry()
+				.with(filter_layer)
+				.with(journal_layer)
+				.init();
+			return;
+		}
 	}
 
-	let mut logger = env_logger::Builder::from_default_env();
-	if args.verbose > 0 {
-		logger.filter_level(match args.verbose {
-			1 => log::LevelFilter::Info,
-			2 => log::LevelFilter::Debug,
-			_ => log::LevelFilter::Trace,
-		});
-	}
-	logger.init();
+	let fmt_layer = fmt::layer()
+		.with_target(false)
+		.with_span_events(FmtSpan::NONE);
+
+	tracing_subscriber::registry()
+		.with(filter_layer)
+		.with(fmt_layer)
+		.init();
 }
 
 /// Main function
