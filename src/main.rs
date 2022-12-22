@@ -49,7 +49,7 @@ struct Args {
 	path: PathBuf,
 	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
 	/// specify Kilobytes, Megabytes, Gigabytes, Terabytes or a percentage
-	/// of the total disk size.
+	/// of the total disk size. Attach `Ki`, `Mi`, etc. to specify Kibibytes, Mebibytes, etc.
 	#[clap(short='f', long, value_name="BYTES|PERCENT", default_value_t=SizeSpec::Percentage(10.0))]
 	min_free_space: SizeSpec,
 

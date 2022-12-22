@@ -4,7 +4,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 /// Representation for a user-specified size limit (percentage or absolute)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SizeSpec {
 	Percentage(f64),
 	Absolute(u64),
@@ -52,7 +52,7 @@ pub enum ParseSizeSpecError {
 	InvalidInt(#[from] ParseIntError),
 	#[error("expected a positive numeric value with an optional unit")]
 	InvalidFloat(#[from] ParseFloatError),
-	#[error("`{0}` is not a valid unit. Known units are `K`, `M`, `G`, `T`, `%`.")]
+	#[error("`{0}` is not a valid unit. Known units are `K`, `Ki`, `M`, `Mi`, `G`, `Gi`, `T`, `Ti`, `%`.")]
 	InvalidUnit(char),
 }
 
@@ -61,31 +61,45 @@ impl FromStr for SizeSpec {
 	type Err = ParseSizeSpecError;
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
 		let first_char = s.chars().next().ok_or(ParseSizeSpecError::EmptyString)?;
-		let last_char = s
-			.chars()
-			.rev()
-			.next()
-			.ok_or(ParseSizeSpecError::EmptyString)?;
+		let (last_char, forelast_char) = {
+			let mut it = s.chars().rev();
+			(
+				it.next().ok_or(ParseSizeSpecError::EmptyString)?,
+				it.next().unwrap_or(' '),
+			)
+		};
 
 		if first_char == '-' {
 			return Err(s.parse::<u64>().unwrap_err().into());
 		}
 
-		match last_char {
-			'0'..='9' => Ok(SizeSpec::Absolute(s.parse::<u64>()?)),
-			'K' | 'k' => Ok(SizeSpec::Absolute(
+		match (forelast_char, last_char) {
+			(_, '0'..='9') => Ok(SizeSpec::Absolute(s.parse::<u64>()?)),
+			('K' | 'k', 'i') => Ok(SizeSpec::Absolute(
+				(s[..s.len() - 2].parse::<f64>()? * 1024.0) as u64,
+			)),
+			('M', 'i') => Ok(SizeSpec::Absolute(
+				(s[..s.len() - 2].parse::<f64>()? * 1048576.0) as u64,
+			)),
+			('G', 'i') => Ok(SizeSpec::Absolute(
+				(s[..s.len() - 2].parse::<f64>()? * 1073741824.0) as u64,
+			)),
+			('T', 'i') => Ok(SizeSpec::Absolute(
+				(s[..s.len() - 2].parse::<f64>()? * 1099511627776.0) as u64,
+			)),
+			(_, 'K' | 'k') => Ok(SizeSpec::Absolute(
 				(s[..s.len() - 1].parse::<f64>()? * 1000.0) as u64,
 			)),
-			'M' => Ok(SizeSpec::Absolute(
+			(_, 'M') => Ok(SizeSpec::Absolute(
 				(s[..s.len() - 1].parse::<f64>()? * 1000000.0) as u64,
 			)),
-			'G' => Ok(SizeSpec::Absolute(
+			(_, 'G') => Ok(SizeSpec::Absolute(
 				(s[..s.len() - 1].parse::<f64>()? * 1000000000.0) as u64,
 			)),
-			'T' => Ok(SizeSpec::Absolute(
+			(_, 'T') => Ok(SizeSpec::Absolute(
 				(s[..s.len() - 1].parse::<f64>()? * 1000000000000.0) as u64,
 			)),
-			'%' => Ok(SizeSpec::Percentage(s[..s.len() - 1].parse::<f64>()?)),
+			(_, '%') => Ok(SizeSpec::Percentage(s[..s.len() - 1].parse::<f64>()?)),
 			_ => Err(ParseSizeSpecError::InvalidUnit(last_char)),
 		}
 	}
@@ -115,6 +129,22 @@ mod tests {
 			"-0", "-1", "-50K", "-1M", "-42G", "-1T", "-0%", "-1%", "-99.5%", "-101%",
 		] {
 			assert!(string.parse::<SizeSpec>().is_err());
+		}
+	}
+
+	/// Tests binary SI units
+	#[test]
+	fn test_binary_units() {
+		for (string, result) in [
+			("0Mi", 0),
+			("0.5Ki", 512),
+			("100Ki", 1024 * 100),
+			("1Mi", 1024 * 1024),
+			("1Gi", 1024 * 1024 * 1024),
+			("1Ti", 1024 * 1024 * 1024 * 1024),
+		] {
+			let value: SizeSpec = string.parse().unwrap();
+			assert_eq!(SizeSpec::Absolute(result), value);
 		}
 	}
 
