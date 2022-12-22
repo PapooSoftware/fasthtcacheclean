@@ -36,7 +36,7 @@ systemctl start fasthtcacheclean.timer
 
 ## Funktionsweis
 
-It works similarily to  `apache-htcacheclean` with some optimizations and parallelization:
+It works similarily to  `apache-htcacheclean` in non-daemon mode with some optimizations and parallelization:
 
 1. First it checks if the set limit was exceeded or is nearly reached. Starting with 90 % of the limit, the first files are deleted.
 2. Old temporary files in the cache main directory are deleted (if modified more than 15 minutes ago).

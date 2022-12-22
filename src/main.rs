@@ -53,8 +53,8 @@ struct Args {
 	#[clap(short='f', long, value_name="BYTES|PERCENT", default_value_t=SizeSpec::Percentage(10.0))]
 	min_free_space: SizeSpec,
 
-	/// Minimum free disk space to keep. Attach 'K', 'M', 'G', 'T' or '%' to
-	/// specify Kilobytes, Megabytes, Gigabytes, Terabytes or a percentage
+	/// Minimum free inodes to keep. Attach 'K', 'M', 'G', 'T' or '%' to
+	/// specify thousands, millions, billions, trillions or a percentage
 	/// of the total disk inodes.
 	#[clap(short='F', long, value_name="COUNT|PERCENT", default_value_t=SizeSpec::Percentage(5.0))]
 	min_free_inodes: SizeSpec,
