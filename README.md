@@ -34,7 +34,7 @@ systemctl enable fasthtcacheclean.timer
 systemctl start fasthtcacheclean.timer
 ```
 
-## Funktionsweis
+## Functionality
 
 It works similarily to  `apache-htcacheclean` in non-daemon mode with some optimizations and parallelization:
 
