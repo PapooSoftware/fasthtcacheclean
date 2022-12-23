@@ -64,22 +64,22 @@ impl CacheFileInfo {
 	}
 
 	#[inline]
-	pub fn expires(&self) -> &SystemTime {
+	pub const fn expires(&self) -> &SystemTime {
 		&self.header_info.expiry
 	}
 
 	#[inline]
-	pub fn modified(&self) -> &SystemTime {
+	pub const fn modified(&self) -> &SystemTime {
 		&self.modified
 	}
 
 	#[inline]
-	pub fn accessed(&self) -> &SystemTime {
+	pub const fn accessed(&self) -> &SystemTime {
 		&self.accessed
 	}
 
 	#[inline]
-	pub fn is_vary(&self) -> bool {
+	pub const fn is_vary(&self) -> bool {
 		matches!(self.header_info.format, apache_cache::Format::Vary)
 	}
 }
