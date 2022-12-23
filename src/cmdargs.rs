@@ -1,3 +1,6 @@
+// Copyright (c) 2022 Papoo Software & Media GmbH <info@papoo.de>
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 use crate::size_spec::SizeSpec;
 use clap::Parser;
 use std::path::PathBuf;

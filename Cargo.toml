@@ -1,8 +1,11 @@
+# Copyright (c) 2022 Papoo Software & Media GmbH <info@papoo.de>
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
 [package]
 name = "fasthtcacheclean"
 version = "0.3.0"
 edition = "2021"
-authors = ["Christoph Grenz (Papoo Software & Media GmbH) <info@papoo.de>"]
+authors = ["Papoo Software & Media GmbH <info@papoo.de>"]
 description = "A faster Apache disk cache cleaner"
 keywords = ["apache", "httpd", "htcacheclean", "mod_cache_disk"]
 categories = ["command-line-utilities"]

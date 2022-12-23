@@ -46,3 +46,9 @@ It works similarily to  `apache-htcacheclean` in non-daemon mode with some optim
    To keep the RAM usage low, only the oldest up to 1'000'000 entries are kept for step 4.
 4. The found cache entries are deleted until disk usage is 99.0 to 99.5 % of the limit.
    If more than 105 % of the limit were used, header file deletion happens more agressively.
+
+
+<!--
+ Copyright (c) 2022 Papoo Software & Media GmbH <info@papoo.de>
+ SPDX-License-Identifier: LGPL-3.0-or-later
+-->

@@ -1,3 +1,6 @@
+// Copyright (c) 2022 Papoo Software & Media GmbH <info@papoo.de>
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
 use libc::c_int;
 use std::io;
 use std::mem::size_of;
