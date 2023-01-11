@@ -49,6 +49,6 @@ It works similarily to  `apache-htcacheclean` in non-daemon mode with some optim
 
 
 <!--
- Copyright (c) 2022 Papoo Software & Media GmbH <info@papoo.de>
+ Copyright (c) 2022 Christoph Grenz (Papoo Software & Media GmbH) <info@papoo.de>
  SPDX-License-Identifier: LGPL-3.0-or-later
 -->
