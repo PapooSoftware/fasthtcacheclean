@@ -1,0 +1,14 @@
+# Copyright (c) 2022 Christoph Grenz (Papoo Software & Media GmbH) <info@papoo.de>
+# SPDX-License-Identifier: CC0-1.0
+[Unit]
+Description=Clean Apache Disk Cache every 10 minutes
+Conflicts=apache-htcacheclean.service
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

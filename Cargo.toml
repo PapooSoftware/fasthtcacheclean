@@ -9,7 +9,7 @@ authors = ["Papoo Software & Media GmbH <info@papoo.de>"]
 description = "A faster Apache disk cache cleaner"
 keywords = ["apache", "httpd", "htcacheclean", "mod_cache_disk"]
 categories = ["command-line-utilities"]
-# license = "..."
+license = "LGPL-3.0-or-later"
 
 [features]
 default = ["systemd"]
@@ -36,3 +36,17 @@ copy_to_output = "2.0"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[package.metadata.deb]
+maintainer-scripts = "debian/"
+systemd-units = { enable = true, start = true, stop-on-upgrade = false, restart-after-upgrade = false }
+assets = [
+	["target/release/fasthtcacheclean", "/usr/bin/fasthtcacheclean", "755"],
+	["target/release/fasthtcacheclean.8", "/usr/share/man/man8/fasthtcacheclean.8", "644"],
+]
+section = "httpd"
+enhances = "apache2"
+extended-description = """\
+It is primarily designed for disk caches on a separate partition or RAM disk
+and faster in cleaning the disk cache. Daemon mode is currently not supported.
+It will run periodically via a systemd timer."""

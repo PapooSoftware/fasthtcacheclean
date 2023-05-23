@@ -1,0 +1,13 @@
+# Copyright (c) 2022 Christoph Grenz (Papoo Software & Media GmbH) <info@papoo.de>
+# SPDX-License-Identifier: CC0-1.0
+[Unit]
+Description=Apache htcache cleaner
+After=apache2.service
+
+[Service]
+Type=simple
+Nice=6
+User=www-data
+Environment=HTCACHECLEAN_PATH=/var/cache/apache2/mod_cache_disk
+EnvironmentFile=-/etc/default/apache-htcacheclean
+ExecStart=/usr/bin/fasthtcacheclean -p $HTCACHECLEAN_PATH -f 20% -F 5%
