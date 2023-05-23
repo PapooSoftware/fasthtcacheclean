@@ -1,8 +1,13 @@
 build:
 	if [ "$$(id -u)" -ne 0 -o -z "$$SUDO_USER" ]; then cargo build --release; else sudo -u "$$SUDO_USER" cargo build --release; fi;
 
+check:
+	if [ "$$(id -u)" -ne 0 -o -z "$$SUDO_USER" ]; then cargo test --release; else sudo -u "$$SUDO_USER" cargo test --release; fi;
+
 clean:
 	cargo clean
+
+distclean: clean
 
 install: build
 	install -m 755 target/release/fasthtcacheclean /usr/local/bin/fasthtcacheclean
@@ -24,4 +29,4 @@ uninstall:
 	rm /usr/local/share/man/man8/fasthtcacheclean.8 || true
 	rm /usr/local/bin/fasthtcacheclean || true
 
-.PHONY: build clean install uninstall
+.PHONY: build clean distclean install uninstall check
