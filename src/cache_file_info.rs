@@ -62,7 +62,7 @@ impl CacheFileInfo {
 	#[inline]
 	pub fn vary_path(&self) -> PathBuf {
 		let mut vary_path = self.header_path.clone();
-		vary_path.set_extension(&CACHE_HEADER_VDIR_EXTENSION);
+		vary_path.set_extension(CACHE_HEADER_VDIR_EXTENSION);
 		vary_path
 	}
 
