@@ -8,6 +8,11 @@ mod cmdargs;
 #[path = "src/size_spec.rs"]
 #[allow(dead_code)]
 mod size_spec;
+#[path = "src/job_count.rs"]
+#[allow(dead_code)]
+mod job_count;
+
+use size_spec::SizeSpec;
 
 fn main() -> std::io::Result<()> {
 	let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or(std::io::ErrorKind::NotFound)?);

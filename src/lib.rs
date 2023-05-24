@@ -23,13 +23,13 @@ use std::time::{Instant, SystemTime};
 mod apache_cache;
 mod cache_file_info;
 mod cache_priority_queue;
-mod cmdargs;
+mod config;
 mod size_spec;
 mod stats;
 
 pub use cache_file_info::CacheFileInfo;
 pub use cache_priority_queue::CachePriorityQueue;
-pub use cmdargs::Args;
+pub use config::Config;
 pub use size_spec::SizeSpec;
 pub use stats::Stats;
 
@@ -161,7 +161,7 @@ pub fn process_header_file(fileinfo: &CacheFileInfo) -> Result<bool, io::Error> 
 ///
 /// Directly deletes definitely unneccessary files and folders, then collects
 /// information about all valid cache entries, prunes them and returns statistics.
-pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Result<Stats, io::Error> {
+pub fn process_folder_parallel(path: &Path, config: &Config, now: &SystemTime) -> Result<Stats, io::Error> {
 	let mut stats = Stats::default();
 
 	debug!("Cleaning up temporary files...");
@@ -180,7 +180,7 @@ pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Re
 	debug!("Cleanup done ({:.2}s).", start.elapsed().as_secs_f64());
 
 	let mut folders = path.read_dir()?.collect::<Vec<_>>();
-	let chunk_size = (folders.len() / args.jobs) + 1;
+	let chunk_size = (folders.len() / config.jobs) + 1;
 	let stats = Mutex::new(stats);
 	let mut queue = CachePriorityQueue::with_capacity(1000, MAX_DELETE_COUNT);
 
@@ -188,7 +188,7 @@ pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Re
 	let mut rng = thread_rng();
 	folders.shuffle(&mut rng);
 
-	debug!("Scanning directories... ({} threads)", args.jobs);
+	debug!("Scanning directories... ({} threads)", config.jobs);
 	let start = Instant::now();
 	// Run `process_folder` in parallel (in up to CPUs/2 threads)
 	thread::scope(|s| {
@@ -199,7 +199,7 @@ pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Re
 			let stats = &stats;
 			s.spawn(move |_| {
 				for folder in chunk.iter().flatten() {
-					let result = process_folder(&folder.path(), args, now, &sender);
+					let result = process_folder(&folder.path(), config, now, &sender);
 					stats.lock().unwrap().merge_result(result);
 				}
 			});
@@ -221,7 +221,7 @@ pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Re
 		for fileinfo in chunk {
 			stats.count(process_header_file(fileinfo));
 		}
-		let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+		let usage = calculate_usage(config.min_free_space, config.min_free_inodes);
 		if usage < 99.0 || (usage < 99.5 && rng.gen::<u8>() < 1) {
 			break;
 		}
@@ -238,15 +238,15 @@ pub fn process_folder_parallel(path: &Path, args: &Args, now: &SystemTime) -> Re
 /// sends information about all valid cache entries via `sender`.
 ///
 /// Activates `desperate` mode if usage is over 105 % of the limits
-/// in `args`.
+/// in `config`.
 pub fn process_folder(
 	path: &Path,
-	args: &Args,
+	config: &Config,
 	now: &SystemTime,
 	sender: &channel::Sender<CacheFileInfo>,
 ) -> Result<Stats, io::Error> {
 	let mut stats = Stats::default();
-	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+	let usage = calculate_usage(config.min_free_space, config.min_free_inodes);
 	let desperate = usage > 105.0;
 
 	stats.merge(scan_folder(path, now, false, sender, desperate)?);

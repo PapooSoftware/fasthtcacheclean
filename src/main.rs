@@ -4,11 +4,15 @@
 #[macro_use]
 extern crate tracing;
 
-use fasthtcacheclean::{Args, calculate_usage, process_folder_parallel};
+mod cmdargs;
+mod job_count;
+
+use fasthtcacheclean::{Config, SizeSpec, calculate_usage, process_folder_parallel};
 use clap::Parser;
 use std::cmp::max;
 use std::env;
 use std::time::SystemTime;
+use cmdargs::Args;
 
 /// Initialize logging/tracing
 fn init_logging(args: &Args) {
@@ -50,35 +54,43 @@ fn init_logging(args: &Args) {
 		.init();
 }
 
+impl Args {
+	pub fn into_config<F: FnOnce() -> usize>(self, job_count_closure: F) -> Config {
+		Config {
+			path: self.path,
+			min_free_space: self.min_free_space,
+			min_free_inodes: self.min_free_inodes,
+			jobs: self.jobs.unwrap_or_else(job_count_closure)
+		}
+	}
+}
+
 /// Main function
 ///
 /// Parses the arguments, initializes logging and runs the cleanup job
 fn main() {
 	// Parse command line arguments
-	let mut args = Args::parse();
+	let args = Args::parse();
 
 	// Initialize logging
 	init_logging(&args);
 
-	// Calculate number of threads if set to "auto"
-	if args.jobs == 0 {
-		let cpus = num_cpus::get();
-		args.jobs = max(1, cpus / 2)
-	}
+	// Create application configuration, calculating number of threads if set to "auto"
+	let config = args.into_config(|| max(1, num_cpus::get() / 2));
 
-	std::env::set_current_dir(&args.path).expect("Couldn't change to cache directory.");
+	std::env::set_current_dir(&config.path).expect("Couldn't change to cache directory.");
 	let now = SystemTime::now();
 
-	let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+	let usage = calculate_usage(config.min_free_space, config.min_free_inodes);
 	info!("Usage: {:.1}% of target space/inode limit", usage);
 
 	if usage >= 90.0 {
 		info!("Pruning cache...");
 
-		let result = process_folder_parallel(".".as_ref(), &args, &now);
+		let result = process_folder_parallel(".".as_ref(), &config, &now);
 
 		if let Ok(stats) = result {
-			let usage = calculate_usage(args.min_free_space, args.min_free_inodes);
+			let usage = calculate_usage(config.min_free_space, config.min_free_inodes);
 			info!("Usage: {:.1}% of target space/inode limit", usage);
 			info!(
 				"Statistics: {} deleted files, {} deleted folders, {} failed to delete",
