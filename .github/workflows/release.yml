@@ -1,0 +1,36 @@
+name: Create relese
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_package:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Build x64 DEB
+      run: "cargo install cargo-deb && cargo deb"
+
+    - name: Create dist directory
+      run: |
+        mkdir dist; cp target/debian/*.deb dist/; cp target/release/fasthtcacheclean dist/fasthtcacheclean-x64
+
+    - name: Create release with assets
+      id: Release-AIO
+      uses: Hs1r1us/Release-AIO@v2.0.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        asset_files: dist/
