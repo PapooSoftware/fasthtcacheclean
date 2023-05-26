@@ -19,12 +19,18 @@ jobs:
       with:
         toolchain: stable
 
+    - name: Install rename
+      run: apt install rename
+
     - name: Build x64 DEB
       run: "cargo install cargo-deb && cargo deb"
 
     - name: Create dist directory
       run: |
         mkdir dist; cp target/debian/*.deb dist/; cp target/release/fasthtcacheclean dist/fasthtcacheclean-x64
+
+    - name: Rename DEB file
+      run: "rename 's/_[0-9]+\.[0-9]+\.[0-9]+_/_/' dist/*.deb"
 
     - name: Create release with assets
       id: Release-AIO
