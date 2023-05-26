@@ -20,7 +20,7 @@ jobs:
         toolchain: stable
 
     - name: Install rename
-      run: apt install rename
+      run: sudo apt install rename
 
     - name: Build x64 DEB
       run: "cargo install cargo-deb && cargo deb"
